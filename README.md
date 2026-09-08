@@ -35,6 +35,8 @@ LiteLLM / vendor API
 | **FastAPI** (`server.py`) | Concurrent games: Human / Random / AI / LLM / Pikafish / external |
 | **LangGraph** | Per-side threads on Redis Stack; compress/trim the window |
 | **MCP** (`mcp_server.py`) | Stateless proxy. Seat token + tool audit. No engine tools. |
+
+LangGraph is in-process per-seat orchestration for LLM/AI seats. MCP is a parallel, seat-gated tool surface for external agents. They are complementary, not a substitute or a linear pipeline.
 | **LiteLLM** | One `LITELLM_API_BASE` / `LITELLM_API_KEY` for the AI-player type |
 
 External agents must `claim_seat` and `submit_move` one ply at a time.
@@ -83,7 +85,7 @@ uvicorn server:app --host 127.0.0.1 --port 8000
 
 `XIANGQI_API_BASE` defaults to `http://127.0.0.1:8000`. After kickoff each side holds a `seat_token`. Bare REST without a token cannot move for that seat.
 
-Contract: [`docs/mcp-agent-contract.md`](docs/mcp-agent-contract.md). Player brief: [`prompts/player/mcp_external.md`](prompts/player/mcp_external.md). Referee helper: `python scripts/mcp_llm_duel_smoke.py`.
+Contract: [`docs/mcp-agent-contract.md`](docs/mcp-agent-contract.md). Player brief: [`prompts/player/mcp_external.md`](prompts/player/mcp_external.md) (`mcp_external.zh.md` when `XIANGQI_LANG=zh`). Referee helper: `python scripts/mcp_llm_duel_smoke.py` (seat/referee copy follows `XIANGQI_LANG`).
 
 ### Tests
 

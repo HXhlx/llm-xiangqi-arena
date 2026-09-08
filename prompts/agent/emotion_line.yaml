@@ -1,6 +1,6 @@
 user: |
   Compress the player aside below into ONE first-person LLM-attitude line,
-  ≤ 80 characters. Output that line only.
+  ≤ 18 characters. Output that line only.
 
   - Keep the attitude that is unique to THIS move. No generic shells.
   - Voice is a large model slipping into a human tell. Light jargon is fine.
