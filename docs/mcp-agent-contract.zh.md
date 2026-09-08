@@ -10,7 +10,7 @@
 
 规则投递（软约束，非沙箱硬拦）：
 
-1. 宿主系统提示可挂 `prompts/player/mcp_external.md`
+1. 宿主系统提示可挂 `prompts/player/mcp_external.md`（`XIANGQI_LANG=zh` 时为 `mcp_external.zh.md`）
 2. 工具 `get_player_brief` 随时拉取
 3. `claim_seat` / `create_duel` / `challenge_preset` 成功响应自动带 `player_brief` + `rules` + `contract_version`
 4. `wait_my_turn` 在 `my_turn` 时带短 `rules_reminder`

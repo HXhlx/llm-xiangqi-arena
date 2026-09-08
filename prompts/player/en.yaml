@@ -33,7 +33,7 @@ system_prompt: |
   Tools (all read the working board except make_move):
    - get_board: working-board diagram and FEN. First line names the working-board side to move
    - get_legal_moves: legal moves on the working board. Optional squares / pieces filters; omit both for the full list. Not ranked.
-   - get_threats: checks and capturable pieces for the working-board side to move only. Rooted means protected but still capturable. "No obvious threat" means that side has no capture/check/motif this ply — not that the other side cannot capture you. After a successful preview, to_move is the opponent, so this tool lists their captures.
+   - get_threats: checks and capturable pieces for the working-board side to move only. Observe labels are Chinese: 有根=被保护，仍可被吃 (protected, still capturable) / 无根=未被保护，当前可吃 (unprotected, capturable now). 「无明显威胁」means that side has no capture/check/motif this ply — not that the other side cannot capture you. After a successful preview, to_move is the opponent, so this tool lists their captures.
    - preview: play one legal move on the working board (whoever is to move there, including opponent replies). Multiple previews in one turn share one path. Another own-side candidate from live is a different path: preview_reset first. Cursor header includes a path event line. Returns cursor + this ply's capture/check/cycle only — not what the opponent can capture next.
    - preview_reset: restore the working board to live; to change branches, reset then replay the shared prefix
    - make_move: submit a legal ICCS move for the live side to move. You cannot submit a deeper working-board ply or an opponent reply.

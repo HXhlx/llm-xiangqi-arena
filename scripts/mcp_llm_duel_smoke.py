@@ -8,6 +8,10 @@ Unified join playbook (subagent / multi-session / remote MCP):
   3. Each agent claim_seat(own side) then plays stepwise
 
 Does not play moves. Optional --preclaim is debug-only (discouraged).
+
+Seat / referee copy follows ``XIANGQI_LANG`` (default English) so an English
+demo is not wrapped in a Chinese shell. The injected player brief is the
+locale path from ``mcp_contract.brief_path``.
 """
 from __future__ import annotations
 
@@ -24,8 +28,12 @@ os.environ.setdefault("XIANGQI_API_BASE", "http://127.0.0.1:18010")
 import asyncio
 
 import mcp_server
+from agent.locale import get_lang
+from mcp_contract import load_player_brief
 
-BRIEF = (ROOT / "prompts" / "player" / "mcp_external.md").read_text(encoding="utf-8")
+
+def _player_brief() -> str:
+    return load_player_brief()
 
 
 def _seat_prompt(
@@ -36,12 +44,89 @@ def _seat_prompt(
     api_base: str,
     max_own_moves: int,
     work_dir: Path,
+    lang: str | None = None,
+) -> str:
+    locale = lang or get_lang()
+    brief = _player_brief()
+    if locale == "zh":
+        return _seat_prompt_zh(
+            name=name,
+            side=side,
+            game_id=game_id,
+            api_base=api_base,
+            max_own_moves=max_own_moves,
+            work_dir=work_dir,
+            brief=brief,
+        )
+    return _seat_prompt_en(
+        name=name,
+        side=side,
+        game_id=game_id,
+        api_base=api_base,
+        max_own_moves=max_own_moves,
+        work_dir=work_dir,
+        brief=brief,
+    )
+
+
+def _seat_prompt_en(
+    *,
+    name: str,
+    side: str,
+    game_id: str,
+    api_base: str,
+    max_own_moves: int,
+    work_dir: Path,
+    brief: str,
+) -> str:
+    side_en = "Red" if side == "red" else "Black"
+    opp = "Black" if side == "red" else "Red"
+    return f"""You are Xiangqi player "{name}", sitting {side_en} (side={side}). This is a real **LLM-plays-the-pieces** duel.
+
+{brief}
+
+## This game (referee opened seats; no cards dealt)
+
+- API: `XIANGQI_API_BASE={api_base}` (export or set in the process env before calling)
+- Repo: `{ROOT}`
+- game_id: `{game_id}`
+- side: `{side}` (claim this seat only)
+- Work dir: `{work_dir}` (meta.json has game_id/side/name only — **no** opponent token)
+
+## Sit (same playbook as remote / multi-session)
+
+1. (Optional) `get_player_brief()`
+2. `claim_seat(game_id, "{side}", name="{name}")` → **store only the returned seat_token**; read the injected rules
+3. Do not read or use the opponent's token; do not write tokens back into shared meta.json
+
+## Task
+
+1. Use `mcp_server` (repo root, `XIANGQI_API_BASE` set) and play **stepwise** per the contract.
+2. You may play at most **{max_own_moves}** of your own moves; if the game is not over, `resign` and write a short report.
+3. Before each submit, say the reason in natural language; `submit_move` `note` is one spoken sentence.
+4. After the game ends or you hit the cap, write the report to `{work_dir}/{side}-report.txt`.
+
+The opponent is another LLM player ({opp}), on the same sit playbook. Use `wait_my_turn` for real moves.
+
+Now: claim_seat first, then start playing.
+"""
+
+
+def _seat_prompt_zh(
+    *,
+    name: str,
+    side: str,
+    game_id: str,
+    api_base: str,
+    max_own_moves: int,
+    work_dir: Path,
+    brief: str,
 ) -> str:
     side_zh = "红" if side == "red" else "黑"
     opp = "黑方" if side == "red" else "红方"
     return f"""你是象棋选手「{name}」，执{side_zh}（side={side}）。这是认真的**大模型对决**实测。
 
-{BRIEF}
+{brief}
 
 ## 本局参数（裁判已开席，未发牌）
 
@@ -70,8 +155,16 @@ def _seat_prompt(
 """
 
 
-def _referee_readme(work: Path, gid: str, api_base: str) -> str:
-    return f"""# 裁判说明（统一入座剧本）
+def _referee_readme(
+    work: Path,
+    gid: str,
+    api_base: str,
+    *,
+    lang: str | None = None,
+) -> str:
+    locale = lang or get_lang()
+    if locale == "zh":
+        return f"""# 裁判说明（统一入座剧本）
 
 game_id: `{gid}`
 api_base: `{api_base}`
@@ -86,6 +179,22 @@ work_dir: `{work}`
 3. 黑读 `black-prompt.txt` → `claim_seat(black)` → 逐步落子
 
 `meta.json` **故意不含** seat_token。token 只存在各 agent 私有记忆里。
+"""
+    return f"""# Referee notes (unified sit playbook)
+
+game_id: `{gid}`
+api_base: `{api_base}`
+work_dir: `{work}`
+
+## Host-independent
+
+Sub-agents, two Cursor sessions, and remote MCP clients all take the same path:
+
+1. Referee already ran `create_duel(auto_claim=false)` (this script)
+2. Red reads `red-prompt.txt` → `claim_seat(red)` → play stepwise
+3. Black reads `black-prompt.txt` → `claim_seat(black)` → play stepwise
+
+`meta.json` **intentionally omits** seat_token. Tokens live only in each agent's private memory.
 """
 
 
@@ -183,6 +292,7 @@ async def main() -> int:
                 "max_own_moves": args.max_own_moves,
                 "join_playbook": "referee_open__agents_claim",
                 "preclaim": bool(args.preclaim),
+                "lang": get_lang(),
                 "next": "Launch red/black agents with red-prompt.txt / black-prompt.txt (each claim_seat)",
             },
             ensure_ascii=False,

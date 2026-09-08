@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import sys
 import unittest
+from pathlib import Path
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
@@ -46,6 +47,14 @@ class EmotionGateTests(unittest.TestCase):
     def test_empty_input(self):
         self.assertEqual(gate_emotion_line(""), "")
         self.assertEqual(gate_emotion_line("   "), "")
+
+    def test_en_yaml_matches_code_char_cap(self):
+        self.assertEqual(EMOTION_MAX_CHARS, 18)
+        agent = Path(PROJECT_ROOT) / "prompts" / "agent"
+        for name in ("turn_summary.yaml", "emotion_line.yaml"):
+            text = (agent / name).read_text(encoding="utf-8")
+            self.assertIn("≤ 18", text, name)
+            self.assertNotIn("≤ 80", text, name)
 
 
 if __name__ == "__main__":

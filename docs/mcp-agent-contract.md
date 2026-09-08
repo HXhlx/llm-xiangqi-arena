@@ -14,7 +14,7 @@ not pick the move. Platform outages are not the player's result.
 
 Rule delivery (soft policy, not a sandbox):
 
-1. Host system prompt may attach `prompts/player/mcp_external.md`
+1. Host system prompt may attach `prompts/player/mcp_external.md` (`mcp_external.zh.md` when `XIANGQI_LANG=zh`)
 2. `get_player_brief` can be called at any time
 3. Successful `claim_seat` / `create_duel` / `challenge_preset` include
    `player_brief` + `rules` + `contract_version`
