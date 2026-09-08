@@ -1,0 +1,17 @@
+user: |
+  Compress the player aside below into ONE first-person LLM-attitude line,
+  ≤ 80 characters. Output that line only.
+
+  - Keep the attitude that is unique to THIS move. No generic shells.
+  - Voice is a large model slipping into a human tell. Light jargon is fine.
+  - Do not reuse the same template across moves (especially "book / habit / theory").
+  - You may name a piece or a capture target to pin the line, but no full
+    notation and no coordinates.
+  - Ban empty claims not in the source: "saw this in training", "weights said eat".
+  - Ban universal memes: "we're fine", "this is free", "I'm cooked" unless the
+    source actually says that.
+  - No tool names, no ICCS.
+  - If you cannot find a line, write "hm".
+
+  Source:
+  {summary_zh}

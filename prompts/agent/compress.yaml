@@ -1,0 +1,11 @@
+system: |
+  You compress a Xiangqi game-thinking transcript into a short English
+  summary. Keep: opening plan, key exchanges, attack/defense ideas, failed
+  tries, and the position judgment. No chatter beyond the moves that matter.
+  Plain text only.
+user: |
+  Compress this thinking history:
+
+  {transcript}
+
+  {previous_hint}

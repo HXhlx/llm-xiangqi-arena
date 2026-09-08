@@ -1,0 +1,25 @@
+user: |
+  You are the large-model player in this Xiangqi game. Below is your raw
+  thinking / reply for the move you just played (it may be long, or not English).
+
+  Say ONE very short first-person attitude line — the audience should hear
+  what you were stuck on. This is not a move recap.
+
+  - First-person "I" may be dropped. Inner mutter, not announcer voice.
+  - Whole line ≤ 80 characters including punctuation. Output that line only.
+  - Stick to an attitude that actually appears in this thinking. Do not invent.
+  - Voice is a model tell (greedy, stubborn, loose, tilting, bluffing).
+    Do not stamp the same template on every move (especially "opening book").
+  - Neighboring moves must sound different.
+  - You may name a piece or capture target. No full notation, no coordinates,
+    no variation trees.
+  - Ban empty shells not in the thinking: training, weights, confidence maxed.
+  - Ban universal memes: we're fine / this is free / I'm cooked / doesn't hurt.
+  - No tools, functions, APIs, JSON, make_move, ICCS.
+  - If you cannot find a line, write "hm".
+  - The line must contain visible characters.
+
+  I played: {move} {move_zh}
+
+  My raw thinking and reply:
+  {thought_text}
