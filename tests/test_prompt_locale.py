@@ -28,6 +28,13 @@ class ChineseBriefTests(unittest.TestCase):
         self.assertIn("走子阶段闸门", zh)
         self.assertIn("docs/mcp-agent-contract.zh.md", zh)
         self.assertNotIn("LLM-plays-the-pieces", zh)
+        for text in (en, zh):
+            self.assertIn("seat_token", text)
+            self.assertIn("auto_claim=false", text)
+        self.assertIn("store only your own `seat_token`", en)
+        self.assertIn("Never write the opponent's token", en)
+        self.assertIn("只保存本席 `seat_token`", zh)
+        self.assertIn("不要把对方的 token 写进共享", zh)
 
     def test_brief_path_follows_lang(self):
         prev = os.environ.get("XIANGQI_LANG")
@@ -72,9 +79,14 @@ class SmokeScriptLocaleTests(unittest.TestCase):
         )
         self.assertIn("LLM-plays-the-pieces", text)
         self.assertIn("claim this seat only", text)
+        self.assertIn("store only the returned seat_token", text)
+        self.assertIn("Do not read or use the opponent's token", text)
+        self.assertIn("do not write tokens back into shared meta.json", text)
+        self.assertIn("no cards dealt", text)
         self.assertNotIn("你是象棋选手", text)
         referee = _referee_readme(Path("/tmp/duel"), "g1", "http://127.0.0.1:8000")
         self.assertIn("Referee notes", referee)
+        self.assertIn("intentionally omits** seat_token", referee)
         self.assertNotIn("裁判说明", referee)
 
     def test_zh_shell_when_lang_zh(self):
@@ -91,9 +103,15 @@ class SmokeScriptLocaleTests(unittest.TestCase):
         )
         self.assertIn("你是象棋选手", text)
         self.assertIn("大模型执子对决", text)
+        self.assertIn("只入本席", text)
+        self.assertIn("只保存返回的本席 seat_token", text)
+        self.assertIn("不要读取或使用对方的 token", text)
+        self.assertIn("不要把 token 写回共享 meta.json", text)
+        self.assertIn("未发牌", text)
         self.assertNotIn("You are Xiangqi player", text)
         referee = _referee_readme(Path("/tmp/duel"), "g1", "http://127.0.0.1:8000")
         self.assertIn("裁判说明", referee)
+        self.assertIn("故意不含** seat_token", referee)
         self.assertNotIn("Referee notes", referee)
 
 
