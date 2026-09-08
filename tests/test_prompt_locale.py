@@ -115,5 +115,24 @@ class SmokeScriptLocaleTests(unittest.TestCase):
         self.assertNotIn("Referee notes", referee)
 
 
+class AgentsLocaleDocsTests(unittest.TestCase):
+    def test_agents_md_documents_chinese_observe_labels(self):
+        text = (Path(PROJECT_ROOT) / "AGENTS.md").read_text(encoding="utf-8")
+        self.assertIn("有根", text)
+        self.assertIn("无根", text)
+        self.assertIn("无明显威胁", text)
+        self.assertIn("tools.yaml", text)
+        self.assertIn("observe.py", text)
+
+    def test_readme_and_agents_show_parallel_not_linear_mcp(self):
+        agents = (Path(PROJECT_ROOT) / "AGENTS.md").read_text(encoding="utf-8")
+        readme = (Path(PROJECT_ROOT) / "README.md").read_text(encoding="utf-8")
+        for text in (agents, readme):
+            self.assertIn("complementary", text.lower())
+            self.assertIn("not a linear pipeline", text.lower())
+        self.assertIn("├─", agents)
+        self.assertIn("┌", readme)
+
+
 if __name__ == "__main__":
     unittest.main()

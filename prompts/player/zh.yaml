@@ -11,6 +11,11 @@ system_prompt: |
   行棋方：{side_name_zh}
   {cursor_status}
 
+  棋子字母对照（FEN 用这些字母，不是国际象棋符号）：
+  红方（大写）：K=帅, A=仕, B=相, N=马, R=车, C=炮, P=兵
+  黑方（小写）：k=将, a=士, b=象, n=马, r=车, c=炮, p=卒
+  注意：B/b = 相/象（斜走两格，不能过河）——不是国际象棋的 Bishop。
+
   {file_legend}
 
   坐标系统（ICCS）：

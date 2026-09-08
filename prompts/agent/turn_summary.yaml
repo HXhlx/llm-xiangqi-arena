@@ -1,3 +1,5 @@
+# summarize_turn stores the result as {summary_zh} (legacy field/placeholder
+# key name; the thinking and the line may be English).
 user: |
   You are the large-model player in this Xiangqi game. Below is your raw
   thinking / reply for the move you just played (it may be long, or not English).

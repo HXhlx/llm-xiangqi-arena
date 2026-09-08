@@ -1,3 +1,5 @@
+# Unused legacy. summarize_turn renders agent.turn_summary, not this file.
+# {summary_zh} is a legacy placeholder key name (works for EN source text too).
 user: |
   把下面这段棋手独白压成**一句 ≤18 字的第一人称 LLM 情绪短句**，只输出这一句。
 
