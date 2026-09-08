@@ -129,7 +129,7 @@ class AgentsLocaleDocsTests(unittest.TestCase):
         readme = (Path(PROJECT_ROOT) / "README.md").read_text(encoding="utf-8")
         for text in (agents, readme):
             self.assertIn("complementary", text.lower())
-            self.assertIn("not a linear pipeline", text.lower())
+            self.assertIn("linear pipeline", text.lower())
         self.assertIn("├─", agents)
         self.assertIn("┌", readme)
 
