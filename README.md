@@ -35,9 +35,9 @@ LiteLLM / vendor API
 | **FastAPI** (`server.py`) | Concurrent games: Human / Random / AI / LLM / Pikafish / external |
 | **LangGraph** | Per-side threads on Redis Stack; compress/trim the window |
 | **MCP** (`mcp_server.py`) | Stateless proxy. Seat token + tool audit. No engine tools. |
+| **LiteLLM** | One `LITELLM_API_BASE` / `LITELLM_API_KEY` for the AI-player type |
 
 LangGraph is in-process per-seat orchestration for LLM/AI seats. MCP is a parallel, seat-gated tool surface for external agents. They are complementary, not a substitute or a linear pipeline.
-| **LiteLLM** | One `LITELLM_API_BASE` / `LITELLM_API_KEY` for the AI-player type |
 
 External agents must `claim_seat` and `submit_move` one ply at a time.
 
