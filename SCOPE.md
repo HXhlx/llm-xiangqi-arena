@@ -1,8 +1,8 @@
 # Scope
 
-This repository is a **public, secret-free showcase** of multi-LLM Xiangqi agents with MCP gating.
+This repository is the **duel core**: a public, inspectable Xiangqi match server with in-process LLM/AI seats and a seat-gated MCP surface for external agents.
 
-## In scope
+## Product surface
 
 | Area | What ships |
 |------|------------|
@@ -10,13 +10,13 @@ This repository is a **public, secret-free showcase** of multi-LLM Xiangqi agent
 | Match server | FastAPI `server.py` — human / random / AI / LLM / Pikafish / external seats |
 | LangGraph orchestration | `agent/player.py`, `agent/graph.py`, Redis checkpointer, compress/trim |
 | MCP tool gating | `mcp_server.py`, `mcp_contract.py`, `external_mcp.py`, seat tokens |
-| LiteLLM client | `llm_client.py` + vendor `adapters/` |
+| LiteLLM client (optional) | `llm_client.py` + vendor `adapters/` — AI-player type only; not required for MCP external seats |
 | Prompts | English player/agent YAML; optional `XIANGQI_LANG=zh` fallbacks |
 | Config templates | `config.example.yaml`, `.env.example` (placeholders only) |
-| Tests | Duel / MCP / prompt / observe / LangGraph unit tests |
+| Tests | 359 unit tests — duel / MCP / prompt / observe / LangGraph (`python -m unittest discover -s tests -q`) |
 | Board art | **One** CC0 set: `minimal_chinese` board + `retro_simple` pieces |
 
-Shipped unit tests (this tree): **351 passed** (`python -m unittest discover -s tests -q`).
+LangGraph and MCP are complementary surfaces. LiteLLM is unused on the dual-MCP external path.
 
 ## Secrets policy
 

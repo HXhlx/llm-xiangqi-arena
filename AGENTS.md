@@ -13,8 +13,8 @@ English-first duel core.
 
 ```text
 game.log ← FastAPI server.py
-             ├─ LangGraph per-side thread (Redis Stack)  # in-process LLM/AI seats
-             └─ MCP seat token → submit_move             # parallel external surface
+ ├─ LangGraph per-side thread (Redis Stack) # in-process LLM/AI seats
+ └─ MCP seat token → submit_move            # parallel external surface
 ```
 
 LangGraph and MCP are complementary, not a linear pipeline. LangGraph = in-process per-seat orchestration; MCP = external seat-gated tool surface.
@@ -22,6 +22,7 @@ LangGraph and MCP are complementary, not a linear pipeline. LangGraph = in-proce
 - One work-dir / log tree per game under `logs/` (gitignored)
 - External agents: `claim_seat` then one `submit_move` per ply
 - No engine tools on the MCP surface
+- LiteLLM is optional and only used by the built-in AI-player type
 
 ## Commands
 
@@ -37,3 +38,4 @@ python -m unittest discover -s tests -q
 
 - Commit `.env`, `config.yaml`, cookies, or real API keys
 - Push secrets “for convenience”
+- Expand beyond the duel core (rules, match server, LangGraph seats, MCP gate)
