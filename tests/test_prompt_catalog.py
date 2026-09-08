@@ -121,7 +121,9 @@ class PromptCatalogTests(unittest.TestCase):
         self.assertIn("无明显威胁", zh_obs)
         self.assertIn("推荐", zh)
         self.assertIn("side to move", en_obs.lower())
-        self.assertIn("no obvious threat", en_obs.lower())
+        self.assertIn("无明显威胁", en_obs)
+        self.assertIn("有根=被保护，仍可被吃", en_obs)
+        self.assertIn("无根=未被保护，当前可吃", en_obs)
         self.assertIn("recommended", en.lower())
 
     def test_agent_compress_zh_fallback(self):

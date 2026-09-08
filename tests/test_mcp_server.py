@@ -506,13 +506,21 @@ class DuelLifecycleTests(McpToolTests):
         self.assertEqual(req.headers.get("x-xiangqi-mcp-tool"), "preview")
 
     async def test_get_player_brief(self):
-        out = await mcp_server.get_player_brief()
-        self.assertTrue(out["ok"])
-        self.assertEqual(out["contract_version"], "mcp-agent-v1")
-        self.assertEqual(out["play_mode"], "llm_stepwise")
-        self.assertIn("must", out["rules"])
-        self.assertIn("forbid", out["rules"])
-        self.assertIn("LLM", out["player_brief"])
+        prev = os.environ.get("XIANGQI_LANG")
+        os.environ.pop("XIANGQI_LANG", None)
+        try:
+            out = await mcp_server.get_player_brief()
+            self.assertTrue(out["ok"])
+            self.assertEqual(out["contract_version"], "mcp-agent-v1")
+            self.assertEqual(out["play_mode"], "llm_stepwise")
+            self.assertIn("must", out["rules"])
+            self.assertIn("forbid", out["rules"])
+            self.assertIn("LLM-plays-the-pieces", out["player_brief"])
+        finally:
+            if prev is None:
+                os.environ.pop("XIANGQI_LANG", None)
+            else:
+                os.environ["XIANGQI_LANG"] = prev
 
     async def test_claim_seat_attaches_contract(self):
         self.route("POST", "/api/game/g1/claim-seat", lambda req: _json_response({
