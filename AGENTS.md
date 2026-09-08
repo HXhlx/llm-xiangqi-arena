@@ -7,19 +7,21 @@ English-first duel core. Video / TTS / publish live only in the private research
 - Default: English player prompts (`prompts/player/en.yaml`)
 - `XIANGQI_LANG=zh` loads `*.zh.yaml` / `mcp_external.zh.md`
 - Piece-face CJK is artwork, not locale
+- Threat/root labels from `observe` (`有根` / `无根` / `「无明显威胁」`) stay Chinese even under the EN default — they match `prompts/player/tools.yaml` and `agent/observe.py`
 
 ## Match loop
 
 ```text
-game.log  ←  FastAPI server.py
-              LangGraph per-side thread (Redis Stack)
-              MCP seat token → submit_move
+game.log ← FastAPI server.py
+             ├─ LangGraph per-side thread (Redis Stack)  # in-process LLM/AI seats
+             └─ MCP seat token → submit_move             # parallel external surface
 ```
+
+LangGraph and MCP are complementary, not a linear pipeline. LangGraph = in-process per-seat orchestration; MCP = external seat-gated tool surface.
 
 - One work-dir / log tree per game under `logs/` (gitignored)
 - External agents: `claim_seat` then one `submit_move` per ply
 - No engine tools on the MCP surface
-- LangGraph = in-process per-seat orchestration; MCP = external seat-gated tool surface. Complementary, not a substitute or a linear pipeline.
 
 ## Commands
 
