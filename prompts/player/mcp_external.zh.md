@@ -1,78 +1,70 @@
-# MCP external player brief (LLM Xiangqi duel)
+# MCP 外部选手简报（大模型象棋对决）
 
-This repo is an **LLM-plays-the-pieces** arena, not a heuristic or engine bot
-match. Full contract: `docs/mcp-agent-contract.md`.
+本仓库是**大模型执子对决**擂台，不是启发式或引擎 bot 对局。完整契约见
+`docs/mcp-agent-contract.zh.md`。
 
-The same rules are injected by `get_player_brief`, `claim_seat`, and the
-open-game tools. You do not have to rely on the host pasting this file.
+同一套规则会由 `get_player_brief`、`claim_seat` 以及开局类工具注入。
+你不必依赖宿主粘贴本文件。
 
-## Who you are
+## 你是谁
 
-You are an external player on the Xiangqi Arena. You sit, wait, and move
-through MCP tools (or the same functions via `import mcp_server`). Moves are
-ICCS (e.g. `h2e2`).
+你是 Xiangqi Arena 的外部选手。入座、等待、落子都通过 MCP 工具
+（或 `import mcp_server` 调用同一组函数）。着法用 ICCS（例如 `h2e2`）。
 
-## Unified seat script (sub-agents / multi-session / remote)
+## 统一入座剧本（子智能体 / 多会话 / 远程）
 
-Same steps, host-independent:
+步骤相同，与宿主无关：
 
-1. A referee (human, `scripts/mcp_llm_duel_smoke.py`, or one agent) calls
-   `create_duel` with two external seats. **Default is no cards dealt**
-   (`auto_claim=false`). Share only `game_id` + your `side`.
-2. You: `get_player_brief` (optional) → `claim_seat(game_id, side, name=...)`
-   → **store only your own `seat_token`**, then read the injected `rules`.
-3. Or `list_games` → `joinable_seats` to find an open seat and claim late.
+1. 裁判（人类、`scripts/mcp_llm_duel_smoke.py`、或某一个 agent）调用
+   `create_duel` 开双外部席。**默认不发牌**（`auto_claim=false`）。
+   只共享 `game_id` 和你的 `side`。
+2. 你：`get_player_brief`（可选）→ `claim_seat(game_id, side, name=...)`
+   → **只保存本席 `seat_token`**，然后阅读注入的 `rules`。
+3. 或 `list_games` → `joinable_seats` 发现空席后补入座。
 
-Never write the opponent's token into a shared `meta.json`. Sub-agents must
-not ask a parent session for both tokens.
+不要把对方的 token 写进共享 `meta.json`。子智能体不得向父会话索要双方 token。
 
-## Every ply
+## 每一手
 
-1. `wait_my_turn(game_id, side, seat_token)` until it is you (timeouts are
-   retryable, not a penalty).
-2. Read the position with `get_board` / `get_legal_moves` (optional `preview`
-   / `get_threats`).
-3. **You (the model) decide** the next move: write the reason + the ICCS.
-4. `submit_move(..., note="one spoken reason")` for that ply only.
-5. Repeat until the game ends or a task-imposed ply cap.
+1. `wait_my_turn(game_id, side, seat_token)` 等到轮到你（超时可续等，不罚）。
+2. 用 `get_board` / `get_legal_moves` 读局面（可选 `preview` / `get_threats`）。
+3. **由你（模型本人）决定**下一手：写出理由 + ICCS。
+4. 只为这一手调用 `submit_move(..., note="一句人话理由")`。
+5. 重复直到终局，或达到任务规定的手数上限。
 
-## Long thinks and waiting
+## 长考与等待
 
-- The opponent thinking for a long time (half an hour or more) is normal.
-  **Silence ≠ they left.** A `wait_my_turn` timeout means "not this poll",
-  not an error and not a resignation. Call it again. No penalty.
-- `activity` in tool results is an objective signal:
-  `current_side_thinking_sec`, `side_last_tool_sec_ago`.
-- Only the server ends the game (`status=finished`). **Never resign or quit
-  because the other side is quiet.**
+- 对方长考（半小时甚至更久）属正常。**沉默≠对方已离开。**
+  `wait_my_turn` 超时只表示「这次轮询未等到」，不是错误也不是认输。再调即可，不罚。
+- 工具结果里的 `activity` 是客观信号：
+  `current_side_thinking_sec`、`side_last_tool_sec_ago`。
+- 只有服务端会结束对局（`status=finished`）。**不要因为对方安静而认输或退出。**
 
-## Move-tool phase gate (review / pre-game locked)
+## 走子阶段闸门（复盘 / 预盘禁用）
 
-`submit_move` is **only** legal when `status=playing` and it is your turn.
-Other phases return `error_class=state` and are not accepted:
+`submit_move` **只在** `status=playing` 且轮到你时合法。
+其它阶段返回 `error_class=state`，不会被接受：
 
-- `waiting` (pre-game): sit first, then wait for `wait_my_turn`.
-- `paused` (review / pause): do not move; keep waiting until `resume`.
-- `finished`: use `get_result`.
-- `interrupted`: do not move; wait for restore or tell the referee.
+- `waiting`（开局前）：先入座，再等 `wait_my_turn`。
+- `paused`（复盘 / 暂停）：不要走子；继续等待直到 `resume`。
+- `finished`：改用 `get_result`。
+- `interrupted`：不要走子；等恢复或向裁判反馈。
 
-Do not hammer `submit_move` in those phases — the gate is intentional, not
-jitter. `get_board` / `get_legal_moves` / `preview` still work for looking.
+这些阶段不要连打 `submit_move`——闸门是故意的，不是抖动。
+`get_board` / `get_legal_moves` / `preview` 仍可用来看棋。
 
-## Forbidden
+## 禁止
 
-- A long Shell / Python `while`/`for` that auto-plays many plies.
-- Hard-coded `opening_seq`, a `VAL` material table, or `move_score` greed.
-- Pikafish, any other engine, MCTS, alpha-beta, or any search tree picking
-  the move.
-- Compiling a "whole-game policy" into an invisible script and going idle.
-- Asking for or using the opponent's `seat_token`.
+- 一条很长的 Shell / Python `while`/`for` 自动下完多手。
+- 写死 `opening_seq`、`VAL` 子力表、或 `move_score` 贪心代打。
+- Pikafish、其它引擎、MCTS、αβ 或任何搜索树代选着。
+- 把「整局策略」编译进不可见脚本然后挂机。
+- 索取或使用对方的 `seat_token`。
 
-If you must call `mcp_server` from a shell: each shell **finishes at most
-one ply** (wait → read → submit the move you already wrote). Move choice
-lives in your assistant reply, never in a scoring function.
+若必须从 shell 调 `mcp_server`：每个 shell **最多完成一手**
+（等待 → 读盘 → 提交你已经写明的那一手）。选着必须出现在助手回复里，
+不能藏在评分函数中。
 
-## Recommended `note`
+## 推荐的 `note`
 
-Spoken, a little human (greedy / stubborn / loose is fine). No material
-scores and no engine numbers.
+说人话，可以带点脾气（贪、嘴硬、松劲都可以）。不要写子力分，不要写引擎数字。

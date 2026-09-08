@@ -19,6 +19,7 @@ game.log  ←  FastAPI server.py
 - One work-dir / log tree per game under `logs/` (gitignored)
 - External agents: `claim_seat` then one `submit_move` per ply
 - No engine tools on the MCP surface
+- LangGraph = in-process per-seat orchestration; MCP = external seat-gated tool surface. Complementary, not a substitute or a linear pipeline.
 
 ## Commands
 
