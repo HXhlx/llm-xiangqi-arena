@@ -1,0 +1,43 @@
+make_move:
+  description: >-
+    Submit your chosen move on the LIVE board. The move must be a legal ICCS
+    for the live side to move. Opening names (炮二平五) are not coordinates —
+    do not assume h2e2. Working-board opponent replies and later plies in a
+    preview line are rejected. Only usable while the game is playing:
+    during review / pre-game / finished / interrupted phases the move gate
+    rejects submissions (do not retry until the game resumes and it is your turn).
+  move: "The live-board move in ICCS format, e.g., 'h2e2', 'b0c2'"
+preview:
+  description: >-
+    Play one legal ICCS move on the working board (whoever is to move there).
+    Multiple previews in one turn share one path. A second own-side candidate
+    from live is a different path: preview_reset first. Does not change the
+    live game.     Returns a cursor header (work depth, to_move, path event line) plus this
+    ply's capture / check / cycle facts only — no diagram, no list of what
+    the opponent can capture next. Recommended: after preview, get_threats
+    lists the opponent's captures (to_move is then the opponent). Legacy
+    name preview_move is accepted as an alias for this tool.
+  move: "The move in ICCS format, e.g., 'h2e2'"
+preview_reset:
+  description: Restore the working board to the live position and clear the preview path.
+get_legal_moves:
+  description: >-
+    List legal moves on the working board for the current working-board side
+    to move (Chinese + ICCS, capture/check/cycle flags, not ranked). The first
+    line names that side. Omit filters for the full list, or pass squares /
+    pieces to query one piece or a batch.
+  squares: Optional origin squares, e.g. 'h2' or 'h2,b0'
+  pieces: Optional piece types, e.g. 'C', '炮', or '炮,马'
+get_threats:
+  description: >-
+    Rule facts on the working board for the side to move there only. The first
+    line names that side. Captures are what that side can take now, labeled
+    有根=被保护，仍可被吃 or 无根=未被保护，当前可吃. Also reports check and motifs such as
+    empty cannon. 「无明显威胁」means that side has no capture/check/motif this
+    ply — not that the other side cannot capture you. After a successful
+    preview, to_move is the opponent, so this tool lists their captures.
+    No scores.
+get_board:
+  description: >-
+    Working-board FEN and letter diagram. First line names the working-board
+    side to move. Last landing square is marked *.

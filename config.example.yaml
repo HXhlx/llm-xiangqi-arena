@@ -1,0 +1,44 @@
+# LLM Xiangqi Arena — copy to config.yaml (gitignored) and fill locally.
+
+pikafish:
+  # Optional local engine for the eval pane / Pikafish seats.
+  # Download a CPU-matched binary + pikafish.nnue into ./pikafish/
+  eval_engine_path: ./pikafish/pikafish-vnni512
+
+# Outbound rate limits (shared Redis bucket xiangqi:rl:)
+# Env overrides: XIANGQI_RPM / XIANGQI_TPM / XIANGQI_MODEL_RPM / XIANGQI_MODEL_TPM
+# 0 = unlimited. Default: no host RPM cap, 300 RPM per model, unlimited TPM.
+rate_limit:
+  rpm: 0
+  model_rpm: 300
+  tpm: 0
+
+# Optional presets (dropdown). Custom LLM fields can also be filled at runtime.
+# Do not commit real api_key values.
+models: []
+  # - name: my-model
+  #   display_name: Panel label (optional; defaults to name)
+  #   api_base: http://localhost:4000/v1
+  #   api_key: sk-xxxxxxxx
+  #   model: your-litellm-model-id
+  #   prompt_name: en
+  #   enable_thinking: true
+  #   max_completion_tokens: 8192
+  #   context_window: 256000
+  #   # max_input_tokens: 192000   # optional compress budget (default=context_window)
+  #   enable_reasoning_effort: false
+  #   reasoning_effort: medium
+  #   rpm: 300
+  #   tpm: 0
+  #
+  # External agent seat (type: external) — no api_base/api_key/model.
+  # An out-of-process agent sits via MCP (mcp_server.py claim_seat / submit_move).
+  # - name: external_seat_a
+  #   type: external
+  #   display_name: External challenger A
+
+# Context compression
+# context_window / optional max_input_tokens live on models[]; compress fires at
+# max_input_tokens (default=context_window) × threshold_ratio
+compress:
+  threshold_ratio: 0.9
