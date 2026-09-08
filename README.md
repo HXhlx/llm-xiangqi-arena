@@ -15,18 +15,23 @@ Chess-style LLM arenas exist. A public, inspectable **Xiangqi** duel with real r
 ## Architecture
 
 ```text
-LiteLLM / vendor API
-        │
-        ▼
- FastAPI match server (server.py)
-        │  LangGraph per-side thread (Redis Stack)
-        │  Xiangqi rules + cycle detection
-        ▼
- game.log + snapshots
-        │
-        ▼
- MCP proxy (mcp_server.py)
-   claim_seat → wait_my_turn → preview* → submit_move
+                    LiteLLM / vendor API
+                            │
+                            ▼
+                 FastAPI match server (server.py)
+                   Xiangqi rules + cycle detection
+                            │
+              ┌─────────────┴─────────────┐
+              │                           │
+              ▼                           ▼
+   LangGraph per-side thread      MCP proxy (mcp_server.py)
+     (Redis Stack; LLM/AI)          claim_seat → wait_my_turn
+                                    → preview* → submit_move
+                                    (external; seat-gated)
+              │                           │
+              └─────────────┬─────────────┘
+                            ▼
+                   game.log + snapshots
 ```
 
 | Layer | What it does |

@@ -27,7 +27,7 @@ REQUIRED_KEYS = (
     "player.tools",
     "agent.compress",
     "agent.turn_summary",
-    "agent.emotion_line",
+    # agent.emotion_line is unused legacy; summarize_turn uses agent.turn_summary.
 )
 
 
@@ -59,6 +59,10 @@ class PromptCatalogTests(unittest.TestCase):
         self.assertIn("{fen}", profile["system_prompt"])
         self.assertIn("{own_pieces}", profile["system_prompt"])
         self.assertIn("{side_name_zh}", profile["turn_prompt"])
+        self.assertIn("棋子字母对照", profile["system_prompt"])
+        self.assertIn("K=帅", profile["system_prompt"])
+        self.assertIn("B=相", profile["system_prompt"])
+        self.assertIn("不是国际象棋的 Bishop", profile["system_prompt"])
 
     def test_list_profiles_does_not_scan_non_player_yaml(self):
         names = [p["name"] for p in list_prompt_profiles()]
@@ -125,6 +129,18 @@ class PromptCatalogTests(unittest.TestCase):
         self.assertIn("有根=被保护，仍可被吃", en_obs)
         self.assertIn("无根=未被保护，当前可吃", en_obs)
         self.assertIn("recommended", en.lower())
+
+    def test_emotion_line_is_unused_legacy(self):
+        """Kept on disk; summarize_turn renders turn_summary, not this key."""
+        self.assertNotIn("agent.emotion_line", REQUIRED_KEYS)
+        doc = load_prompt("agent.emotion_line")
+        self.assertIn("{summary_zh}", str(doc.get("user") or ""))
+        raw = (Path(PROMPTS_DIR) / "agent" / "emotion_line.yaml").read_text(encoding="utf-8")
+        self.assertIn("Unused legacy", raw)
+        self.assertIn("legacy placeholder", raw)
+        summary = (Path(PROMPTS_DIR) / "agent" / "turn_summary.yaml").read_text(encoding="utf-8")
+        self.assertIn("summary_zh", summary)
+        self.assertIn("legacy", summary.lower())
 
     def test_agent_compress_zh_fallback(self):
         from prompt_registry import PROMPTS_DIR, _load_prompt_file, _prompt_file_path
