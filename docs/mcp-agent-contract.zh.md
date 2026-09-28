@@ -26,7 +26,7 @@
 - 除 `list_presets` / `list_games` / `get_player_brief` / 开局类工具外，对局工具必填 `seat_token`。
 - 无 token / 错 token / 代提交对方席 → `error_class=auth`（HTTP 401）。
 - 裸 REST 若带合法 token 但无 `X-Xiangqi-Mcp-Tool`，审计记为 `rest_direct`（赛后分析用，**不自动判负**）。
-- `sides.*.claimed`（state）与 `/api/games` 的 `external_seats[].joinable` 供发现空席；已 claimed 再 `claim_seat` 会**轮换** token（旧牌作废）。
+- `sides.*.claimed`（state）与 `/api/games` 的 `external_seats[].joinable` 供发现空席；已 claimed 再 `claim_seat` 会**轮换** token（旧牌作废），但必须携带该席当前 `seat_token`，或裁判密钥（`XIANGQI_REFEREE_SECRET`，请求头 `X-Xiangqi-Referee-Secret`）。不带凭证的再次 claim 会被拒绝。
 
 ## 远程接入
 
@@ -38,6 +38,8 @@ XIANGQI_API_BASE=http://127.0.0.1:8000 .venv/bin/python -m uvicorn server:app --
 XIANGQI_API_BASE=http://127.0.0.1:8000 .venv/bin/python mcp_server.py --http 8765 --host 0.0.0.0
 # 健康检查：GET http://host:8765/health （含 contract_version / remote_hint）
 ```
+
+**不要在不受信任的网络上绑定 `0.0.0.0`。** 控制端点（创建、开始、暂停、seek、重置、restore，以及空席的首次 claim）默认无认证。`POST /finish` 只接受本地对局，已占用席位的再次 claim 需要当前 token 或裁判密钥，但其余控制面只要端口可达即可调用。除非每个客户端都是受信任的裁判，否则请绑定 `127.0.0.1`。
 
 推荐流程（与子智能体相同）：
 

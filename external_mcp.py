@@ -15,6 +15,8 @@ from agent.observe_session import ObserveSession
 MCP_LOG_DIR_NAME = "mcp"
 SEAT_HEADER = "x-xiangqi-seat-token"
 MCP_TOOL_HEADER = "x-xiangqi-mcp-tool"
+REFEREE_HEADER = "x-xiangqi-referee-secret"
+ENV_REFEREE_SECRET = "XIANGQI_REFEREE_SECRET"
 RESULT_TRUNCATE = 2000
 ARGS_TRUNCATE = 800
 
@@ -88,14 +90,36 @@ def get_observe(game, side: str) -> ObserveSession:
     return obs
 
 
+def _secret_equal(expected: str, presented: str) -> bool:
+    """Constant-time compare. Bytes, because ``compare_digest`` rejects non-ASCII str."""
+    try:
+        left = expected.encode("utf-8")
+        right = presented.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    return secrets.compare_digest(left, right)
+
+
+def referee_secret_matches(presented: Optional[str]) -> bool:
+    """True when ``presented`` equals ``XIANGQI_REFEREE_SECRET``.
+
+    An unset or empty secret never matches, so re-claim falls back to the
+    current seat token.
+    """
+    expected = (os.environ.get(ENV_REFEREE_SECRET) or "").strip()
+    got = (presented or "").strip()
+    if not expected or not got:
+        return False
+    return _secret_equal(expected, got)
+
+
 def resolve_side_for_token(game, token: Optional[str]) -> Optional[str]:
     ensure_seat_maps(game)
     if not token:
         return None
     for side in ("red", "black"):
-        if game.seat_tokens.get(side) and secrets.compare_digest(
-            str(game.seat_tokens[side]), str(token)
-        ):
+        stored = game.seat_tokens.get(side)
+        if stored and _secret_equal(str(stored), str(token)):
             return side
     return None
 

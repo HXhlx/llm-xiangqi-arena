@@ -68,6 +68,14 @@ class TestBoardDiagram(unittest.TestCase):
         self.assertNotRegex(prompt, r"炮二平五\s+h2e2")
         self.assertNotIn("马八进七", prompt)
 
+    def test_english_system_prompt_uses_english_opening_label(self):
+        b = Board(START_FEN)
+        prompt = build_system_prompt(b, "w", "en")
+        self.assertIn("none yet (opening)", prompt)
+        self.assertIn("Working board starts at live", prompt)
+        self.assertNotIn("尚无", prompt)
+        self.assertNotIn("开局工作盘", prompt)
+
     def test_engine_fen_unchanged(self):
         b = Board(START_FEN)
         self.assertEqual(b.to_fen().split()[0], START_FEN.split()[0])

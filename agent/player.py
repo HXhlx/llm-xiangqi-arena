@@ -12,6 +12,7 @@ from langgraph.graph import END, START, StateGraph
 from openai import APIConnectionError, APIStatusError, AsyncOpenAI
 
 from adapters import get_adapter
+from agent.locale import is_zh
 from agent.observe_session import ObserveSession, is_submit_ok
 from llm_client import (
     DEFAULT_MAX_TOOL_ROUNDS,
@@ -20,6 +21,7 @@ from llm_client import (
     execute_tool,
     _turn_prompt,
 )
+from prompt_registry import get_default_prompt_name, get_prompt_profile
 from xiangqi import Board
 
 from .checkpoint_sync import merge_model_messages
@@ -44,7 +46,13 @@ REASONING_EFFORTS = frozenset(
 )
 MAX_MAKE_MOVE_NUDGES = 3
 
-_MOVE_GATE_PHASES = {
+_MOVE_GATE_PHASES_EN = {
+    "waiting": "pre-game",
+    "paused": "review/pause",
+    "finished": "post-game",
+    "interrupted": "interrupted",
+}
+_MOVE_GATE_PHASES_ZH = {
     "waiting": "预盘/开局前",
     "paused": "复盘/暂停",
     "finished": "终局复盘",
@@ -53,18 +61,47 @@ _MOVE_GATE_PHASES = {
 
 
 def move_gate_error(status: str | None) -> Optional[str]:
-    """走子阶段闸门：非 playing 时返回禁用错误文本，否则 None。
+    """Return a make_move rejection when status is not playing, else None.
 
-    与 MCP 侧 submit_move 的阶段闸门保持一致：复盘/预盘/终局/中断
-    阶段 make_move 一律禁用，防止对局停止后 agent 仍提交着法。
+    Same phase gate as MCP submit_move: review, pre-game, post-game, and
+    interrupted games do not accept a ply.
     """
     st = (status or "").strip().lower()
     if not st or st == "playing":
         return None
-    phase = _MOVE_GATE_PHASES.get(st, st)
+    if is_zh():
+        phase = _MOVE_GATE_PHASES_ZH.get(st, st)
+        return (
+            f"make_move 已禁用（对局 status={st}，{phase}阶段不走子）。"
+            "此着不会被受理；对局恢复 playing 且轮到你时再提交。"
+        )
+    phase = _MOVE_GATE_PHASES_EN.get(st, st)
     return (
-        f"make_move 已禁用（对局 status={st}，{phase}阶段不走子）。"
-        "此着不会被受理；对局恢复 playing 且轮到你时再提交。"
+        f"make_move is disabled (status={st}; {phase} does not accept moves). "
+        "This ply will not be accepted. Submit again when the game is playing "
+        "and it is your turn."
+    )
+
+
+def position_update_label(prompt_name: str | None) -> str:
+    """Header for a later-turn board snapshot. Follows the player profile."""
+    if (prompt_name or "").strip().lower() == "zh":
+        return "[局面更新]"
+    return "[Position update]"
+
+
+def _tool_retry_body(prompt_name: str | None) -> str:
+    """Profile ``tool_retry_prompt``, with an English fallback."""
+    try:
+        text = str(get_prompt_profile(prompt_name).get("tool_retry_prompt") or "").strip()
+    except ValueError:
+        text = ""
+    if text:
+        return text
+    return (
+        "Tool-node error: make_move was not called this turn. "
+        "You must call make_move with a live-board ICCS move (e.g. h2e2). "
+        "Coordinates in the text body are not a submit."
     )
 
 
@@ -83,8 +120,15 @@ def _current_task_cancelling() -> bool:
     return bool(cancelling()) if callable(cancelling) else False
 
 
-def handle_missing_make_move(misses_so_far: int) -> dict[str, Any]:
-    """No make_move this model round: perceivable tool-node error, at most 3 times."""
+def handle_missing_make_move(
+    misses_so_far: int,
+    *,
+    prompt_name: str | None = None,
+) -> dict[str, Any]:
+    """No make_move this model round: perceivable tool-node error, at most 3 times.
+
+    The nudge body is the active profile's ``tool_retry_prompt``.
+    """
     nxt = int(misses_so_far or 0) + 1
     if nxt > MAX_MAKE_MOVE_NUDGES:
         return {
@@ -100,10 +144,7 @@ def handle_missing_make_move(misses_so_far: int) -> dict[str, Any]:
         "done": False,
         "move": None,
         "make_move_misses": nxt,
-        "error_text": (
-            f"工具节点错误 [{nxt}/{MAX_MAKE_MOVE_NUDGES}]：本回合未调用 make_move。"
-            "必须使用 make_move 提交真实盘走法（ICCS，例如 h2e2）。正文里的坐标不会落子。"
-        ),
+        "error_text": f"[{nxt}/{MAX_MAKE_MOVE_NUDGES}] {_tool_retry_body(prompt_name)}",
     }
 
 
@@ -200,7 +241,7 @@ class LangGraphPlayer:
         side_name: str = "red",
         timeout: Optional[float] = None,
         max_tool_rounds: int = DEFAULT_MAX_TOOL_ROUNDS,
-        prompt_name: str = "zh",
+        prompt_name: Optional[str] = None,
         enable_thinking: bool = True,
         max_completion_tokens: int = 8192,
         context_window: int = 256000,
@@ -224,7 +265,7 @@ class LangGraphPlayer:
         self.side_name = side_name
         self.timeout = timeout
         self.max_tool_rounds = max_tool_rounds
-        self.prompt_name = prompt_name
+        self.prompt_name = prompt_name or get_default_prompt_name()
         self.enable_thinking = enable_thinking
         self.max_completion_tokens = max_completion_tokens
         self.context_window = max(4096, int(context_window or 256000))
@@ -470,7 +511,7 @@ class LangGraphPlayer:
             else:
                 board_update = (
                     f"{turn_text}\n\n"
-                    f"[局面更新]\n{system_prompt}"
+                    f"{position_update_label(player.prompt_name)}\n{system_prompt}"
                 )
                 updates.append(HumanMessage(content=board_update))
             player._observe = ObserveSession(board)
@@ -589,7 +630,10 @@ class LangGraphPlayer:
                 return pack([ai], done=False)
 
             ai = AIMessage(content=content or "")
-            nudge = handle_missing_make_move(int(state.get("make_move_misses") or 0))
+            nudge = handle_missing_make_move(
+                int(state.get("make_move_misses") or 0),
+                prompt_name=player.prompt_name,
+            )
             if nudge.get("done"):
                 player.last_turn_trace = dict(player._turn_trace)
                 return pack(
@@ -678,7 +722,10 @@ class LangGraphPlayer:
             if not should_count_missing_make_move(names):
                 out["done"] = False
                 return out
-            nudge = handle_missing_make_move(int(state.get("make_move_misses") or 0))
+            nudge = handle_missing_make_move(
+                int(state.get("make_move_misses") or 0),
+                prompt_name=player.prompt_name,
+            )
             if nudge.get("done"):
                 player.last_turn_trace = dict(player._turn_trace)
                 out["done"] = True

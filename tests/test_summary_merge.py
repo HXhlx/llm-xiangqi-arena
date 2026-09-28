@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""摘要合并更新单元测试：不实际调 LLM，用 monkeypatch 替换摘要结果。"""
+"""Summary-merge tests: no live LLM, compress output is stubbed."""
 import asyncio
+import os
 import sys
 
-sys.path.insert(0, ".")
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
 
 import agent.compress as C
 

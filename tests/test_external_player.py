@@ -17,6 +17,8 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
+from fastapi import HTTPException
+
 import server
 import external_mcp
 
@@ -214,11 +216,11 @@ class ExternalMoveEndpointTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(server.HTTPException) as ctx:
             await _move(game.id, "red", "h2e2", tok)
         self.assertIn("not playing", str(ctx.exception.detail))
-        # 复盘/预盘阶段禁用走子：错误附阶段 status 与中文指引
+        # Non-playing phases reject the move and name the status.
         detail = ctx.exception.detail
         self.assertEqual(detail.get("error_class"), "state")
         self.assertEqual(detail.get("status"), "paused")
-        self.assertIn("复盘/预盘", detail.get("error", ""))
+        self.assertIn("review, pre-game", detail.get("error", ""))
         game.external_moves["red"].put_nowait({"move": "h2e2", "note": ""})
         await server.resume_game(game.id)
         try:
@@ -642,6 +644,195 @@ class PreviewAndAuditTests(unittest.IsolatedAsyncioTestCase):
                 types = {e["type"] for e in game.events}
                 self.assertIn("tool_call", types)
                 self.assertIn("tool_result", types)
+
+
+def _local_game(gid: str = "local1") -> server.GameSession:
+    return server.GameSession(
+        gid,
+        DEFAULT_FEN,
+        server.PlayerConfig(type="random", name="Red"),
+        server.PlayerConfig(type="ai", name="Black"),
+    )
+
+
+class FinishTrustTests(unittest.IsolatedAsyncioTestCase):
+    async def test_local_finish_applies_client_moves_and_winner(self):
+        game = _local_game()
+        game.status = "playing"
+        server.games[game.id] = game
+        self.addCleanup(lambda: server.games.pop(game.id, None))
+        req = server.FinishGameRequest(moves=["h2e2"], winner="red", reason="adjudicated")
+        with patch.object(server, "clear_game_threads", AsyncMock()):
+            result = await server.finish_game(game.id, req)
+        self.assertEqual(result["status"], "finished")
+        self.assertEqual(result["winner"], "red")
+        self.assertEqual(game.status, "finished")
+        self.assertEqual(game.move_history[0]["move"], "h2e2")
+
+    async def test_finish_rejects_llm_game_without_rewriting_history(self):
+        game = server.GameSession(
+            "llmfin",
+            DEFAULT_FEN,
+            server.PlayerConfig(type="llm", model="m", api_base="https://example.invalid/v1", api_key="k"),
+            server.PlayerConfig(type="random"),
+        )
+        game.status = "playing"
+        game.move_history.append({"move": "a0a1", "side": "red"})
+        server.games[game.id] = game
+        self.addCleanup(lambda: server.games.pop(game.id, None))
+        req = server.FinishGameRequest(moves=["h2e2"], winner="black", reason="forged")
+        with self.assertRaises(HTTPException) as ctx:
+            await server.finish_game(game.id, req)
+        self.assertEqual(ctx.exception.status_code, 403)
+        self.assertEqual(ctx.exception.detail["error_class"], "auth")
+        self.assertEqual(game.status, "playing")
+        self.assertIsNone(game.winner)
+        self.assertEqual(game.move_history, [{"move": "a0a1", "side": "red"}])
+
+    async def test_finish_rejects_external_game(self):
+        game = _ext_vs_random("extfin")
+        game.status = "playing"
+        server.games[game.id] = game
+        self.addCleanup(lambda: server.games.pop(game.id, None))
+        with self.assertRaises(HTTPException) as ctx:
+            await server.finish_game(
+                game.id, server.FinishGameRequest(moves=[], winner="red", reason="forged")
+            )
+        self.assertEqual(ctx.exception.status_code, 403)
+        self.assertEqual(game.status, "playing")
+        self.assertEqual(game.move_history, [])
+
+
+class ClaimSeatTrustTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self._prev_secret = os.environ.get("XIANGQI_REFEREE_SECRET")
+        os.environ.pop("XIANGQI_REFEREE_SECRET", None)
+
+    def tearDown(self):
+        if self._prev_secret is None:
+            os.environ.pop("XIANGQI_REFEREE_SECRET", None)
+        else:
+            os.environ["XIANGQI_REFEREE_SECRET"] = self._prev_secret
+
+    def _game(self) -> server.GameSession:
+        game = _ext_vs_ext("claimtrust")
+        server.games[game.id] = game
+        self.addCleanup(lambda: server.games.pop(game.id, None))
+        return game
+
+    async def test_first_claim_of_empty_seat_needs_no_token(self):
+        game = self._game()
+        out = await server.claim_seat(game.id, server.ClaimSeatRequest(side="red"))
+        self.assertTrue(out["seat_token"])
+        self.assertEqual(game.seat_tokens["red"], out["seat_token"])
+
+    async def test_reclaim_without_credential_is_rejected(self):
+        game = self._game()
+        first = await server.claim_seat(game.id, server.ClaimSeatRequest(side="red"))
+        token = first["seat_token"]
+        with self.assertRaises(HTTPException) as ctx:
+            await server.claim_seat(game.id, server.ClaimSeatRequest(side="red"))
+        self.assertEqual(ctx.exception.status_code, 401)
+        self.assertEqual(ctx.exception.detail["error_class"], "auth")
+        self.assertEqual(game.seat_tokens["red"], token)
+
+    async def test_reclaim_with_current_token_rotates(self):
+        game = self._game()
+        first = await server.claim_seat(game.id, server.ClaimSeatRequest(side="red"))
+        token = first["seat_token"]
+        second = await server.claim_seat(
+            game.id,
+            server.ClaimSeatRequest(side="red"),
+            x_xiangqi_seat_token=token,
+        )
+        self.assertTrue(second["seat_token"])
+        self.assertNotEqual(second["seat_token"], token)
+        self.assertEqual(game.seat_tokens["red"], second["seat_token"])
+
+    async def test_other_seats_token_cannot_rotate(self):
+        game = self._game()
+        red = await server.claim_seat(game.id, server.ClaimSeatRequest(side="red"))
+        black = await server.claim_seat(game.id, server.ClaimSeatRequest(side="black"))
+        with self.assertRaises(HTTPException) as ctx:
+            await server.claim_seat(
+                game.id,
+                server.ClaimSeatRequest(side="red"),
+                x_xiangqi_seat_token=black["seat_token"],
+            )
+        self.assertEqual(ctx.exception.status_code, 401)
+        self.assertEqual(game.seat_tokens["red"], red["seat_token"])
+
+    async def test_reclaim_with_referee_secret_rotates(self):
+        os.environ["XIANGQI_REFEREE_SECRET"] = "referee-test-secret"
+        game = self._game()
+        first = await server.claim_seat(game.id, server.ClaimSeatRequest(side="black"))
+        token = first["seat_token"]
+        with self.assertRaises(HTTPException):
+            await server.claim_seat(
+                game.id,
+                server.ClaimSeatRequest(side="black"),
+                x_xiangqi_referee_secret="wrong",
+            )
+        self.assertEqual(game.seat_tokens["black"], token)
+        second = await server.claim_seat(
+            game.id,
+            server.ClaimSeatRequest(side="black"),
+            x_xiangqi_referee_secret="referee-test-secret",
+        )
+        self.assertNotEqual(second["seat_token"], token)
+        self.assertEqual(game.seat_tokens["black"], second["seat_token"])
+
+    async def test_non_ascii_header_does_not_crash_reclaim(self):
+        os.environ["XIANGQI_REFEREE_SECRET"] = "裁判密钥"
+        game = self._game()
+        first = await server.claim_seat(game.id, server.ClaimSeatRequest(side="red"))
+        token = first["seat_token"]
+        with self.assertRaises(HTTPException) as ctx:
+            await server.claim_seat(
+                game.id,
+                server.ClaimSeatRequest(side="red"),
+                x_xiangqi_seat_token="不是令牌",
+                x_xiangqi_referee_secret="错误密钥",
+            )
+        self.assertEqual(ctx.exception.status_code, 401)
+        self.assertEqual(game.seat_tokens["red"], token)
+        second = await server.claim_seat(
+            game.id,
+            server.ClaimSeatRequest(side="red"),
+            x_xiangqi_seat_token="不是令牌",
+            x_xiangqi_referee_secret="裁判密钥",
+        )
+        self.assertNotEqual(second["seat_token"], token)
+        self.assertEqual(game.seat_tokens["red"], second["seat_token"])
+
+
+class UserFacingCopyTests(unittest.TestCase):
+    def setUp(self):
+        self._prev = os.environ.get("XIANGQI_LANG")
+        os.environ.pop("XIANGQI_LANG", None)
+
+    def tearDown(self):
+        if self._prev is None:
+            os.environ.pop("XIANGQI_LANG", None)
+        else:
+            os.environ["XIANGQI_LANG"] = self._prev
+
+    def test_activity_and_gate_copy_are_english_by_default(self):
+        game = _local_game("copy1")
+        note = server._activity_payload(game)["note"]
+        self.assertIn("status=finished", note)
+        self.assertNotIn("对方", note)
+        self.assertIn("cumulative work board", server._preview_illegal_hint())
+        self.assertIn("status=playing", server._submit_not_playing_error("paused"))
+        self.assertNotIn("复盘", server._submit_not_playing_error("paused"))
+
+    def test_activity_and_gate_copy_follow_zh_locale(self):
+        os.environ["XIANGQI_LANG"] = "zh"
+        game = _local_game("copy2")
+        note = server._activity_payload(game)["note"]
+        self.assertIn("对方长考", note)
+        self.assertIn("累积式工作盘", server._preview_illegal_hint())
+        self.assertIn("submit_move 仅", server._submit_not_playing_error("paused"))
 
 
 if __name__ == "__main__":

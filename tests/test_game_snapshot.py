@@ -308,7 +308,13 @@ class GameSnapshotTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(game.id, server.games)
 
     async def test_finish_without_winner_does_not_drop_session(self):
-        game = self._make_game()
+        # /finish is local-only. This case is random vs random, not an LLM seat.
+        game = server.GameSession(
+            "snap-local",
+            DEFAULT_FEN,
+            server.PlayerConfig(type="random"),
+            server.PlayerConfig(type="random"),
+        )
         game.status = "playing"
         server.games[game.id] = game
         self.addCleanup(lambda: server.games.pop(game.id, None))

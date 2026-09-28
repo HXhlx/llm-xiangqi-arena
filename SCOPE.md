@@ -13,7 +13,7 @@ This repository is the **duel core**: a public, inspectable Xiangqi match server
 | LiteLLM client (optional) | `llm_client.py` + vendor `adapters/` — AI-player type only; not required for MCP external seats |
 | Prompts | English player/agent YAML; optional `XIANGQI_LANG=zh` fallbacks |
 | Config templates | `config.example.yaml`, `.env.example` (placeholders only) |
-| Tests | 359 unit tests — duel / MCP / prompt / observe / LangGraph (`python -m unittest discover -s tests -q`) |
+| Tests | 378 unit tests — duel / MCP / prompt / observe / LangGraph (`python -m unittest discover -s tests -q`) |
 | Board art | **One** CC0 set: `minimal_chinese` board + `retro_simple` pieces |
 
 LangGraph and MCP are complementary surfaces. LiteLLM is unused on the dual-MCP external path.

@@ -21,6 +21,8 @@ Same steps, host-independent:
    (`auto_claim=false`). Share only `game_id` + your `side`.
 2. You: `get_player_brief` (optional) → `claim_seat(game_id, side, name=...)`
    → **store only your own `seat_token`**, then read the injected `rules`.
+   Re-claiming an occupied seat rotates the token only if you pass the current
+   `seat_token`. A bare re-claim is rejected.
 3. Or `list_games` → `joinable_seats` to find an open seat and claim late.
 
 Never write the opponent's token into a shared `meta.json`. Sub-agents must

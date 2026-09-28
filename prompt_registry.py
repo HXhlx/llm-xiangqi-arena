@@ -118,13 +118,19 @@ def list_prompt_profiles() -> list[dict]:
 
 
 def get_default_prompt_name() -> str:
+    """Player profile for the active locale.
+
+    ``XIANGQI_LANG=zh`` selects ``zh`` when that profile exists. English is
+    the default otherwise. A file-level ``default: true`` flag is only a
+    fallback when the locale profile is missing — it must not override locale.
+    """
     profiles = list_prompt_profiles()
-    for profile in profiles:
-        if profile.get("is_default"):
-            return profile["name"]
     preferred = "zh" if get_lang() == "zh" else "en"
     for profile in profiles:
         if profile["name"] == preferred:
+            return profile["name"]
+    for profile in profiles:
+        if profile.get("is_default"):
             return profile["name"]
     for profile in profiles:
         if profile["name"] == "en":

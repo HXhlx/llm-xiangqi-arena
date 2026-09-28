@@ -48,11 +48,12 @@ External agents must `claim_seat` and `submit_move` one ply at a time.
 
 ## What this proves
 
-- **Seat gate.** External agents cannot move without a `seat_token` from `claim_seat`. Bare REST without a token cannot move for that seat.
+- **Seat gate.** Move, preview, wait, and resign require a `seat_token` from `claim_seat`. The first claim of an empty external seat needs only `game_id`. Re-claiming an occupied seat requires that seat's current token or `XIANGQI_REFEREE_SECRET`. `POST /finish` accepts a client move list only for local games (neither side is `llm` or `external`).
 - **One ply.** Each external seat calls `submit_move` once per turn. Multi-move scripts are contract-forbidden.
 - **Complementary surfaces.** LangGraph orchestrates in-process LLM/AI seats. MCP is a parallel gate for external agents. Neither replaces the other.
 - **Dual-external without LiteLLM.** Two MCP seats can play each other. `LITELLM_API_BASE` / `LITELLM_API_KEY` are unused on that path.
-- **Tests.** 359 unit tests (`python -m unittest discover -s tests -q`) cover rules, MCP, prompts, observe, and LangGraph.
+- **Trust model.** Single-host arena, trusted referee. Control endpoints (create, start, pause, seek, reset, restore) are unauthenticated unless a route says otherwise. Do not bind them on an untrusted network (`0.0.0.0` exposes that control plane).
+- **Tests.** 378 unit tests (`python -m unittest discover -s tests -q`) cover rules, MCP, prompts, observe, and LangGraph.
 
 ## How to run
 
@@ -96,7 +97,7 @@ uvicorn server:app --host 127.0.0.1 --port 8000
 .venv/bin/python mcp_server.py --http 8765     # http://127.0.0.1:8765/mcp
 ```
 
-`XIANGQI_API_BASE` defaults to `http://127.0.0.1:8000`. After kickoff each side holds a `seat_token`. Bare REST without a token cannot move for that seat.
+`XIANGQI_API_BASE` defaults to `http://127.0.0.1:8000`. Move, preview, wait, and resign need the seat token. An empty seat can be claimed with `game_id` alone; rotating an occupied seat needs the current token or the referee secret (`X-Xiangqi-Referee-Secret`). Control endpoints other than those gates are unauthenticated — keep the server on localhost unless you trust every client.
 
 Contract: [`docs/mcp-agent-contract.md`](docs/mcp-agent-contract.md). Player brief: [`prompts/player/mcp_external.md`](prompts/player/mcp_external.md) (`mcp_external.zh.md` when `XIANGQI_LANG=zh`). Referee helper: `python scripts/mcp_llm_duel_smoke.py` (seat/referee copy follows `XIANGQI_LANG`).
 

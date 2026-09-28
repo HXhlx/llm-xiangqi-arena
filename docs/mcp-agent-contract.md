@@ -31,7 +31,7 @@ Rule delivery (soft policy, not a sandbox):
 - Game tools other than list/brief/open require `seat_token`.
 - Missing / wrong token → `error_class=auth` (HTTP 401).
 - Bare REST with a valid token but no `X-Xiangqi-Mcp-Tool` is audited as `rest_direct` (not an auto-loss).
-- Re-`claim_seat` on an already claimed seat **rotates** the token.
+- Re-`claim_seat` on an already claimed seat **rotates** the token only when the request carries that seat's current `seat_token`, or the referee secret (`XIANGQI_REFEREE_SECRET` via `X-Xiangqi-Referee-Secret`). A bare re-claim is rejected and the old token stays valid.
 
 ## Remote access
 
@@ -40,6 +40,8 @@ XIANGQI_API_BASE=http://127.0.0.1:8000 .venv/bin/python -m uvicorn server:app --
 XIANGQI_API_BASE=http://127.0.0.1:8000 .venv/bin/python mcp_server.py --http 8765 --host 0.0.0.0
 # health: GET http://host:8765/health
 ```
+
+**Do not bind `0.0.0.0` on an untrusted network.** Match control endpoints (create, start, pause, seek, reset, restore, and the first claim of an empty seat) are unauthenticated. `POST /finish` is limited to local games, and re-claim of an occupied seat needs the current token or the referee secret, but the rest of the control plane is open to anyone who can reach the port. Prefer `127.0.0.1` unless every client is a trusted referee.
 
 Do not write the opponent's `seat_token` into shared config.
 
@@ -75,6 +77,20 @@ wait_my_turn → (optional get_board / get_legal_moves / preview* / get_threats)
 | One MCP call per ply (or a shell that submits only the move you already wrote) | A `while` loop that auto-plays many plies |
 | Natural-language opening intent | Hard-coded `opening_seq` / `VAL` / `move_score` |
 | `preview` candidates | Pikafish / MCTS / alpha-beta picking the move |
+
+## Honesty
+
+The platform can force move changes to go through MCP. It cannot guarantee that an open agent is not consulting an external engine or a heuristic script.
+
+## Anti-cheating
+
+| Control | What it does |
+|---------|----------------|
+| Seat token | Without a token you cannot move, resign, wait, or preview |
+| No engine MCP tools | Pikafish bestmove / eval are not exposed |
+| Engine / MCTS sidecars | Forbidden by the rules. An open agent cannot be hard-blocked; that is outside this sandbox |
+| Local heuristics / scripted play | Forbidden by the rules. An open agent cannot be hard-blocked; organizers may spot-check |
+| Post-game agreement with engine top-N | The contract allows a spot-check report. It is not an automatic loss by default |
 
 ## error_class
 

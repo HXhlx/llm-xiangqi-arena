@@ -532,6 +532,18 @@ class DuelLifecycleTests(McpToolTests):
         self.assertEqual(out["contract_version"], "mcp-agent-v1")
         self.assertTrue(out["player_brief"])
         self.assertIn("VAL", " ".join(out["rules"]["forbid"]))
+        req = self._request("POST", "/api/game/g1/claim-seat")
+        self.assertIsNone(req.headers.get("x-xiangqi-seat-token"))
+
+    async def test_claim_seat_forwards_token_for_rotation(self):
+        self.route("POST", "/api/game/g1/claim-seat", lambda req: _json_response({
+            "ok": True, "game_id": "g1", "side": "red", "seat_token": "rotated",
+        }))
+        out = await mcp_server.claim_seat("g1", "red", seat_token="old-token")
+        self.assertEqual(out["seat_token"], "rotated")
+        req = self._request("POST", "/api/game/g1/claim-seat")
+        self.assertEqual(req.headers.get("x-xiangqi-seat-token"), "old-token")
+        self.assertEqual(req.headers.get("x-xiangqi-mcp-tool"), "claim_seat")
 
     async def test_create_duel_auto_claim_false_skips_tokens(self):
         self.route("POST", "/api/game/create", lambda req: _json_response({

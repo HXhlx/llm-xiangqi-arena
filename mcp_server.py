@@ -171,7 +171,12 @@ def _player_payload(spec: dict) -> dict:
     return body
 
 
-async def _claim(game_id: str, side: str, name: Optional[str] = None) -> dict:
+async def _claim(
+    game_id: str,
+    side: str,
+    name: Optional[str] = None,
+    seat_token: Optional[str] = None,
+) -> dict:
     body: dict[str, Any] = {"side": side}
     if name:
         body["name"] = name
@@ -179,6 +184,7 @@ async def _claim(game_id: str, side: str, name: Optional[str] = None) -> dict:
         "POST",
         f"/api/game/{game_id}/claim-seat",
         json=body,
+        seat_token=seat_token,
         mcp_tool="claim_seat",
     )
     if status != 200:
@@ -373,8 +379,9 @@ async def list_games() -> dict:
         "open_seats": open_seats,
         "joinable_seats": joinable_seats,
         "hint": (
-            "Remote sit: pick a side from joinable_seats → claim_seat; "
-            "claim_seat on an already-claimed seat rotates the token."
+            "Remote sit: pick a side from joinable_seats → claim_seat. "
+            "Re-claim of an occupied seat rotates the token only when you pass "
+            "that seat's current seat_token."
         ),
     }
 
@@ -433,13 +440,21 @@ async def challenge_preset(
 
 @mcp.tool
 async def claim_seat(
-    game_id: str, side: str, name: Optional[str] = None
+    game_id: str,
+    side: str,
+    name: Optional[str] = None,
+    seat_token: Optional[str] = None,
 ) -> dict:
-    """Issue or rotate a seat_token for an external seat; response includes player_brief and rules."""
+    """Claim an empty external seat, or rotate one you already hold.
+
+    The first claim needs only game_id and side. Re-claim of an occupied seat
+    requires that seat's current seat_token. The response includes player_brief
+    and rules.
+    """
     body_side = str(side or "").strip().lower()
     if body_side not in {"red", "black"}:
         return {"ok": False, "error": 'side must be "red" or "black"', "error_class": "rules"}
-    return await _claim(game_id, body_side, name)
+    return await _claim(game_id, body_side, name, seat_token)
 
 
 @mcp.tool
@@ -943,7 +958,11 @@ def main() -> None:
     parser.add_argument(
         "--host",
         default="127.0.0.1",
-        help="HTTP bind address (use 0.0.0.0 for remote)",
+        help=(
+            "HTTP bind address (default 127.0.0.1). "
+            "0.0.0.0 exposes unauthenticated control endpoints; "
+            "do not use it on an untrusted network."
+        ),
     )
     args = parser.parse_args()
     if args.http is not None:

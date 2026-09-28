@@ -136,18 +136,27 @@ def _get_last_opponent_move(board: Board) -> str:
     return move
 
 
+def _is_zh_profile(prompt_profile: dict) -> bool:
+    return str(prompt_profile.get("name") or "").strip().lower() == "zh"
+
+
 def _cursor_status_copy(prompt_profile: dict) -> str:
-    name = str(prompt_profile.get("name") or "")
-    if name == "en":
+    if _is_zh_profile(prompt_profile):
         return (
-            "Working board starts at live; after that, trust the tool-result header. "
-            "Multiple previews in one turn share one path; header to_move is the side "
-            "to move on the working board."
+            "开局工作盘=live；之后以工具返回头为准。"
+            "同一轮多个 preview 串在一条 path 上；工具头 to_move 才是当前工作盘行棋方。"
         )
     return (
-        "开局工作盘=live；之后以工具返回头为准。"
-        "同一轮多个 preview 串在一条 path 上；工具头 to_move 才是当前工作盘行棋方。"
+        "Working board starts at live; after that, trust the tool-result header. "
+        "Multiple previews in one turn share one path; header to_move is the side "
+        "to move on the working board."
     )
+
+
+def _opening_move_label(prompt_profile: dict) -> str:
+    if _is_zh_profile(prompt_profile):
+        return "尚无（开局）"
+    return "none yet (opening)"
 
 
 def _build_prompt_params(board: Board, side: str, prompt_name: str | None = None) -> tuple[dict, dict]:
@@ -160,7 +169,7 @@ def _build_prompt_params(board: Board, side: str, prompt_name: str | None = None
         side_name=side_name,
         side_name_zh=side_name_zh,
         fen=board.to_fen(),
-        last_opponent_move=_get_last_opponent_move(board) or "尚无（开局）",
+        last_opponent_move=_get_last_opponent_move(board) or _opening_move_label(prompt_profile),
         file_legend=file_legend(side),
         own_pieces=own_pieces(board, side),
         cursor_status=_cursor_status_copy(prompt_profile),

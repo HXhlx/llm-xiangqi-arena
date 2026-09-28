@@ -16,17 +16,23 @@ class TestMissingMakeMoveNudge(unittest.TestCase):
         return handle_missing_make_move
 
     def test_first_miss_returns_tool_error_not_done(self):
-        out = self._fn()(0)
+        out = self._fn()(0, prompt_name="en")
         self.assertFalse(out["done"])
         self.assertIsNone(out.get("move"))
         self.assertEqual(out["make_move_misses"], 1)
         text = out["error_text"]
         self.assertIn("make_move", text)
-        self.assertIn("工具节点错误", text)
+        self.assertIn("Tool-node error", text)
         self.assertIn("1/3", text)
+        self.assertNotIn("工具节点错误", text)
+
+    def test_zh_profile_uses_tool_retry_prompt(self):
+        out = self._fn()(0, prompt_name="zh")
+        self.assertIn("工具节点错误", out["error_text"])
+        self.assertIn("1/3", out["error_text"])
 
     def test_third_miss_still_nudges(self):
-        out = self._fn()(2)
+        out = self._fn()(2, prompt_name="en")
         self.assertFalse(out["done"])
         self.assertEqual(out["make_move_misses"], 3)
         self.assertIn("3/3", out["error_text"])
@@ -66,7 +72,17 @@ class TestNoTextFallback(unittest.TestCase):
 
 
 class TestMoveGateError(unittest.TestCase):
-    """走子阶段闸门纯函数：非 playing 一律禁用。"""
+    """Phase gate: non-playing statuses reject make_move. English by default."""
+
+    def setUp(self):
+        self._prev = os.environ.get("XIANGQI_LANG")
+        os.environ.pop("XIANGQI_LANG", None)
+
+    def tearDown(self):
+        if self._prev is None:
+            os.environ.pop("XIANGQI_LANG", None)
+        else:
+            os.environ["XIANGQI_LANG"] = self._prev
 
     def _fn(self):
         from agent.player import move_gate_error
@@ -79,25 +95,31 @@ class TestMoveGateError(unittest.TestCase):
 
     def test_paused_disabled_with_phase_hint(self):
         err = self._fn()("paused")
-        self.assertIn("make_move 已禁用", err)
+        self.assertIn("make_move is disabled", err)
         self.assertIn("paused", err)
-        self.assertIn("复盘/暂停", err)
-        self.assertIn("不会被受理", err)
+        self.assertIn("review/pause", err)
+        self.assertIn("will not be accepted", err)
 
     def test_waiting_finished_interrupted_disabled(self):
-        self.assertIn("预盘/开局前", self._fn()("waiting"))
-        self.assertIn("终局复盘", self._fn()("finished"))
-        self.assertIn("中断", self._fn()("interrupted"))
+        self.assertIn("pre-game", self._fn()("waiting"))
+        self.assertIn("post-game", self._fn()("finished"))
+        self.assertIn("interrupted", self._fn()("interrupted"))
 
     def test_case_and_whitespace_insensitive(self):
-        self.assertIn("已禁用", self._fn()("PAUSED"))
-        self.assertIn("已禁用", self._fn()(" Paused "))
-        self.assertIn("已禁用", self._fn()("Finished"))
+        self.assertIn("disabled", self._fn()("PAUSED"))
+        self.assertIn("disabled", self._fn()(" Paused "))
+        self.assertIn("disabled", self._fn()("Finished"))
 
     def test_unknown_status_still_disabled(self):
         err = self._fn()("weird")
-        self.assertIn("已禁用", err)
+        self.assertIn("disabled", err)
         self.assertIn("weird", err)
+
+    def test_zh_locale_uses_chinese_phase_text(self):
+        os.environ["XIANGQI_LANG"] = "zh"
+        err = self._fn()("paused")
+        self.assertIn("make_move 已禁用", err)
+        self.assertIn("复盘/暂停", err)
 
 
 class TestStatusProbeWiring(unittest.TestCase):
@@ -137,6 +159,16 @@ class TestMoveGateGraph(unittest.IsolatedAsyncioTestCase):
     async def test_paused_make_move_gated_and_aborted(self):
         import json as _json
         from unittest.mock import AsyncMock, patch
+
+        prev_lang = os.environ.pop("XIANGQI_LANG", None)
+
+        def _restore_lang():
+            if prev_lang is None:
+                os.environ.pop("XIANGQI_LANG", None)
+            else:
+                os.environ["XIANGQI_LANG"] = prev_lang
+
+        self.addCleanup(_restore_lang)
 
         from langgraph.checkpoint.memory import MemorySaver
         from xiangqi import Board
@@ -188,7 +220,7 @@ class TestMoveGateGraph(unittest.IsolatedAsyncioTestCase):
         rounds = trace.get("tool_rounds") or []
         self.assertTrue(rounds)
         contents = [r.get("content") for rs in rounds for r in rs.get("tool_results", [])]
-        self.assertTrue(any("make_move 已禁用" in (c or "") for c in contents), contents)
+        self.assertTrue(any("make_move is disabled" in (c or "") for c in contents), contents)
 
     async def test_playing_make_move_untouched(self):
         import json as _json

@@ -12,7 +12,9 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from agent.locale import get_lang
+from agent.player import LangGraphPlayer, position_update_label
 from mcp_contract import brief_path, load_player_brief
+from prompt_registry import get_default_prompt_name
 
 
 PLAYER_DIR = Path(PROJECT_ROOT) / "prompts" / "player"
@@ -115,6 +117,33 @@ class SmokeScriptLocaleTests(unittest.TestCase):
         self.assertNotIn("Referee notes", referee)
 
 
+class DefaultPromptLocaleTests(unittest.TestCase):
+    def setUp(self):
+        self._prev = os.environ.get("XIANGQI_LANG")
+
+    def tearDown(self):
+        if self._prev is None:
+            os.environ.pop("XIANGQI_LANG", None)
+        else:
+            os.environ["XIANGQI_LANG"] = self._prev
+
+    def test_default_locale_selects_en_despite_default_flag(self):
+        os.environ.pop("XIANGQI_LANG", None)
+        self.assertEqual(get_default_prompt_name(), "en")
+        player = LangGraphPlayer("http://example.invalid/v1", "k", "m")
+        self.assertEqual(player.prompt_name, "en")
+        self.assertEqual(position_update_label(player.prompt_name), "[Position update]")
+
+    def test_zh_locale_yields_zh_default(self):
+        os.environ["XIANGQI_LANG"] = "zh"
+        self.assertEqual(get_lang(), "zh")
+        self.assertEqual(get_default_prompt_name(), "zh")
+        player = LangGraphPlayer("http://example.invalid/v1", "k", "m")
+        self.assertEqual(player.prompt_name, "zh")
+        self.assertEqual(position_update_label("zh"), "[局面更新]")
+        self.assertEqual(position_update_label("en"), "[Position update]")
+
+
 class AgentsLocaleDocsTests(unittest.TestCase):
     def test_agents_md_documents_chinese_observe_labels(self):
         text = (Path(PROJECT_ROOT) / "AGENTS.md").read_text(encoding="utf-8")
@@ -132,6 +161,22 @@ class AgentsLocaleDocsTests(unittest.TestCase):
             self.assertIn("linear pipeline", text.lower())
         self.assertIn("├─", agents)
         self.assertIn("┌", readme)
+
+    def test_readme_describes_unauthenticated_control_plane(self):
+        readme = (Path(PROJECT_ROOT) / "README.md").read_text(encoding="utf-8")
+        self.assertIn("unauthenticated", readme.lower())
+        self.assertIn("XIANGQI_REFEREE_SECRET", readme)
+        self.assertIn("local games", readme)
+        self.assertNotIn("Bare REST without a token cannot move", readme)
+
+    def test_english_contract_has_honesty_and_anticheat(self):
+        text = (Path(PROJECT_ROOT) / "docs" / "mcp-agent-contract.md").read_text(encoding="utf-8")
+        self.assertIn("cannot guarantee", text.lower())
+        self.assertIn("## Anti-cheating", text)
+        self.assertIn("external engine", text)
+        self.assertIn("unauthenticated", text.lower())
+        self.assertIn("0.0.0.0", text)
+        self.assertIn("XIANGQI_REFEREE_SECRET", text)
 
 
 if __name__ == "__main__":

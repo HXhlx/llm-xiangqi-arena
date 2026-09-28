@@ -1,5 +1,5 @@
 """
-FastAPI backend for Xiangqi LLM Duel (LLM vs LLM Chinese chess arena).
+FastAPI backend for LLM Xiangqi Arena.
 Manages game sessions and proxies LLM / engine interactions.
 Supports human, random, LLM, AI, and Pikafish player types.
 """
@@ -22,6 +22,7 @@ from pydantic import BaseModel
 
 from xiangqi import Board
 from agent import LangGraphPlayer, clear_game_threads
+from agent.locale import is_zh
 from agent.compress_settings import (
     resolve_compress_threshold_ratio,
     resolve_context_window,
@@ -40,6 +41,7 @@ import mcp_contract
 
 SeatTokenHdr = Annotated[Optional[str], Header()]
 McpToolHdr = Annotated[Optional[str], Header()]
+RefereeSecretHdr = Annotated[Optional[str], Header()]
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 load_dotenv(os.path.join(BASE_DIR, ".env"))
@@ -566,7 +568,11 @@ class WaitTurnRequest(BaseModel):
 
 
 class ClaimSeatRequest(BaseModel):
-    """Mint / rotate a seat token for an external side."""
+    """Mint a seat token for an empty external side.
+
+    Re-claim of an occupied seat is refused unless the request carries that
+    seat's current token or the referee secret.
+    """
 
     side: str  # "red" | "black"
     name: Optional[str] = None
@@ -682,6 +688,19 @@ def wake_waiters(game: GameSession) -> None:
     game.waiter_event.set()
 
 
+# Seats the match server itself drives. POST /finish must not overwrite them.
+# random and ai stay local, matching start_game (the client runs that loop).
+_SERVER_DRIVEN_SEAT_TYPES = frozenset({"llm", "external"})
+
+
+def _is_local_game(game: GameSession) -> bool:
+    """True when neither side is an in-process LLM or external seat."""
+    return (
+        game.red_config.type not in _SERVER_DRIVEN_SEAT_TYPES
+        and game.black_config.type not in _SERVER_DRIVEN_SEAT_TYPES
+    )
+
+
 def _http_err(
     status: int,
     error: str,
@@ -790,10 +809,45 @@ def _side_last_tool_sec_ago(game: GameSession, side: str) -> Optional[float]:
     return round(time.time() - float(ts), 1)
 
 
+def _activity_note() -> str:
+    """Waiting-agent note. English by default; Chinese when XIANGQI_LANG=zh."""
+    if is_zh():
+        return "对方长考（半小时甚至更久）属正常节奏，不代表退出；只有 status=finished 才是对局结束"
+    return (
+        "Long opponent thinks (30 minutes or more) are a normal pace, not a resignation. "
+        "Only status=finished ends the game."
+    )
+
+
+def _preview_illegal_hint() -> str:
+    if is_zh():
+        return (
+            "preview 是累积式工作盘：预演一步后轮次换边，"
+            "可继续预演对方应着，或 preview_reset 回到真实盘重新预演"
+        )
+    return (
+        "preview walks a cumulative work board: after one ply the side to move flips. "
+        "Keep previewing the reply, or preview_reset to return to the live board."
+    )
+
+
+def _submit_not_playing_error(status: str) -> str:
+    if is_zh():
+        return (
+            f"Game is not playing (status={status}). "
+            "submit_move 仅 status=playing 可用：复盘/预盘/终局/中断阶段禁用走子"
+        )
+    return (
+        f"Game is not playing (status={status}). "
+        "submit_move is only available while status=playing; "
+        "review, pre-game, post-game, and interrupted phases reject moves."
+    )
+
+
 def _activity_payload(game: GameSession) -> dict:
-    """对手活跃度信号：长考≠退出，把客观事实亮给等待方 agent 看。"""
+    """Activity facts for the waiting agent. A long think is not a resignation."""
     out: dict = {
-        "note": "对方长考（半小时甚至更久）属正常节奏，不代表退出；只有 status=finished 才是对局结束",
+        "note": _activity_note(),
         "side_last_tool_sec_ago": {
             "red": _side_last_tool_sec_ago(game, "red"),
             "black": _side_last_tool_sec_ago(game, "black"),
@@ -1625,7 +1679,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="Xiangqi LLM Duel",
+    title="LLM Xiangqi Arena",
     description="Backend-only Xiangqi arena: LangGraph LLM players, MCP seat gating, LiteLLM routing.",
     lifespan=lifespan,
 )
@@ -1848,10 +1902,7 @@ async def start_game(game_id: str):
     # If neither side is LLM/external, the game is "local" — client runs its own
     # loop. Server still tracks state for /api/games and writes log on /finish.
     # External games ARE server-driven: game_loop waits on the /move queue.
-    is_local = (
-        game.red_config.type not in {"llm", "external"}
-        and game.black_config.type not in {"llm", "external"}
-    )
+    is_local = _is_local_game(game)
     if is_local:
         game.status = "playing"
         game.broadcast("status", {"status": "playing"})
@@ -2027,7 +2078,10 @@ async def reset_game(game_id: str):
 @app.post("/api/game/{game_id}/finish")
 async def finish_game(game_id: str, req: FinishGameRequest):
     """Finalize a client-driven (local) game: replay moves on server, write log.
+
     Idempotent — calling twice on a finished game is a no-op.
+    Refused for llm/external games so a client cannot overwrite an agent match
+    or invent a winner. This route is otherwise unauthenticated.
     """
     game = games.get(game_id)
     if not game:
@@ -2038,6 +2092,13 @@ async def finish_game(game_id: str, req: FinishGameRequest):
         except Exception as exc:
             print(f"  [redis] clear threads failed for {game.id}: {exc}")
         return {"status": "already_finished"}
+    if not _is_local_game(game):
+        _http_err(
+            403,
+            "finish is only allowed for local games "
+            "(neither side may be llm or external)",
+            error_class="auth",
+        )
 
     # Replay from initial FEN to reconstruct server-side move history
     board = Board(game.initial_fen)
@@ -2085,13 +2146,47 @@ async def finish_game(game_id: str, req: FinishGameRequest):
 
 # --- External (MCP) player APIs ---
 
+def _reclaim_authorized(
+    game: GameSession,
+    side: str,
+    seat_token: Optional[str],
+    referee_secret: Optional[str],
+) -> bool:
+    """Occupied-seat rotation: current token for that side, or referee secret."""
+    if external_mcp.resolve_side_for_token(game, seat_token) == side:
+        return True
+    return external_mcp.referee_secret_matches(referee_secret)
+
+
 @app.post("/api/game/{game_id}/claim-seat")
-async def claim_seat(game_id: str, req: ClaimSeatRequest):
-    """Issue (or rotate) a seat token for an external side; embeds player contract."""
+async def claim_seat(
+    game_id: str,
+    req: ClaimSeatRequest,
+    x_xiangqi_seat_token: SeatTokenHdr = None,
+    x_xiangqi_referee_secret: RefereeSecretHdr = None,
+):
+    """Issue a seat token for an empty external side; embeds player contract.
+
+    The first claim needs only ``game_id``. Re-claiming an occupied seat
+    rotates the token only when the request presents that seat's current
+    token (``X-Xiangqi-Seat-Token``) or ``X-Xiangqi-Referee-Secret`` matching
+    ``XIANGQI_REFEREE_SECRET``.
+    """
     game = games.get(game_id)
     if not game:
         raise HTTPException(404, "Game not found")
     side = (req.side or "").strip().lower()
+    existing = None
+    if side in {"red", "black"}:
+        existing = (getattr(game, "seat_tokens", None) or {}).get(side)
+    if existing and not _reclaim_authorized(
+        game, side, x_xiangqi_seat_token, x_xiangqi_referee_secret
+    ):
+        _http_err(
+            401,
+            "occupied seat requires the current seat token or referee secret to re-claim",
+            error_class="auth",
+        )
     token = external_mcp.issue_seat_token(game, side)
     if req.name and str(req.name).strip():
         cfg = game.red_config if side == "red" else game.black_config
@@ -2201,10 +2296,7 @@ async def preview_move(
             out["reason"] = diag["reason"]
         if diag.get("code"):
             out["reason_code"] = diag["code"]
-        out["hint"] = (
-            "preview 是累积式工作盘：预演一步后轮次换边，"
-            "可继续预演对方应着，或 preview_reset 回到真实盘重新预演"
-        )
+        out["hint"] = _preview_illegal_hint()
     else:
         opp_in_check = obs.work.is_in_check(obs.work.turn)
         opp_has_moves = bool(obs.work.get_legal_moves())
@@ -2422,10 +2514,7 @@ async def submit_external_move(
     )
     if game.status != "playing":
         detail = {
-            "error": (
-                f"Game is not playing (status={game.status}). "
-                "submit_move 仅 status=playing 可用：复盘/预盘/终局/中断阶段禁用走子"
-            ),
+            "error": _submit_not_playing_error(game.status),
             "error_class": "state",
             "status": game.status,
         }
@@ -2575,7 +2664,7 @@ async def list_active_games():
 async def root():
     return {
         "service": "llm-xiangqi-arena",
-        "description": "象棋大模型对决",
+        "description": "LLM Xiangqi Arena",
         "docs": "/docs",
     }
 
@@ -2594,7 +2683,7 @@ if __name__ == "__main__":
         print(f"  Please close the other process or use a different port.\n")
         exit(1)
 
-    print("\n  llm-xiangqi-arena - 象棋大模型对决")
+    print("\n  llm-xiangqi-arena")
     print("  =================================")
     print(f"  http://localhost:{port}")
     print(f"  API docs: http://localhost:{port}/docs")
