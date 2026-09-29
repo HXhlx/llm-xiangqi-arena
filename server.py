@@ -1,7 +1,10 @@
 """
 FastAPI backend for LLM Xiangqi Arena.
-Manages game sessions and proxies LLM / engine interactions.
-Supports human, random, LLM, AI, and Pikafish player types.
+Manages game sessions and proxies LLM interactions.
+
+Playing seats: random, llm (custom OpenAI-compatible endpoint), ai (resolved
+to an in-process LLM seat via the LiteLLM proxy), and external (MCP).
+There is no human seat. Pikafish is an optional analysis evaluator, not a seat.
 """
 
 import asyncio
@@ -22,6 +25,7 @@ from pydantic import BaseModel
 
 from xiangqi import Board
 from agent import LangGraphPlayer, clear_game_threads
+from llm_client import resolve_max_tool_rounds
 from agent.locale import is_zh
 from agent.compress_settings import (
     resolve_compress_threshold_ratio,
@@ -274,6 +278,7 @@ def _player_config_summary(config) -> dict:
     if config.type in ("llm", "ai"):
         summary.update({
             "preset": config.preset,
+            "litellm": True if getattr(config, "litellm", False) else None,
             "api_base": config.api_base,
             "model": config.model,
             "prompt_name": _resolved_prompt_name(config),
@@ -473,7 +478,10 @@ def parse_game_log(filepath: str, include_moves: bool = True) -> dict:
 
 
 class PlayerConfig(BaseModel):
-    type: str = "llm"  # llm | random | external
+    type: str = "llm"  # llm | random | ai | external
+    # True after type=ai is mapped to an llm seat on the LiteLLM proxy.
+    # Snapshots keep this flag and drop api_key; restore re-reads LITELLM_*.
+    litellm: bool = False
     name: Optional[str] = None  # player display name
     preset: Optional[str] = None
     api_base: Optional[str] = None
@@ -689,12 +697,12 @@ def wake_waiters(game: GameSession) -> None:
 
 
 # Seats the match server itself drives. POST /finish must not overwrite them.
-# random and ai stay local, matching start_game (the client runs that loop).
-_SERVER_DRIVEN_SEAT_TYPES = frozenset({"llm", "external"})
+# random stays local (the client may submit /finish). llm, ai, and external do not.
+_SERVER_DRIVEN_SEAT_TYPES = frozenset({"llm", "ai", "external"})
 
 
 def _is_local_game(game: GameSession) -> bool:
-    """True when neither side is an in-process LLM or external seat."""
+    """True when neither side is server-driven (llm, ai, or external)."""
     return (
         game.red_config.type not in _SERVER_DRIVEN_SEAT_TYPES
         and game.black_config.type not in _SERVER_DRIVEN_SEAT_TYPES
@@ -913,7 +921,31 @@ def _snapshot_player_config(config: PlayerConfig) -> dict:
 
 
 def _rehydrate_snapshot_player(raw) -> PlayerConfig:
+    """Rebuild a seat from a snapshot.
+
+    Snapshots drop ``api_key``. An AI/LiteLLM seat (``litellm`` or ``type=ai``)
+    is resolved again from ``LITELLM_API_BASE`` / ``LITELLM_API_KEY`` and the
+    preset or stored model, so a preset's own endpoint is not substituted.
+    Missing proxy settings fail the restore. The snapshot's ``api_base`` is
+    never returned with ``api_key=None`` (that would send ``OPENAI_API_KEY``
+    to the proxy).
+    """
     config = PlayerConfig.model_validate(raw or {"type": "random"})
+    if config.type == "ai" or config.litellm:
+        try:
+            revived = _resolve_ai_to_llm(config.model_copy(update={"type": "ai"}))
+        except HTTPException as exc:
+            detail = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
+            raise ValueError(
+                "Cannot restore AI seat: "
+                f"{detail}. Refusing to call the proxy without an API key."
+            ) from exc
+        if not (revived.api_key or "").strip():
+            raise ValueError(
+                "Cannot restore AI seat: resolved API key is empty. "
+                "Refusing to call the proxy without an API key."
+            )
+        return revived
     if config.type not in {"llm", "external"} or not config.preset:
         return config
     try:
@@ -1184,8 +1216,9 @@ async def _persist_llm_turn(
     skip_summary = bool(move_record.get("error")) or not move
     try:
         sum_model = (config.compress_model or config.model or "").strip()
-        if (not skip_summary) and sum_model and (config.api_base or config.type == "ai"):
-            # type=ai already resolved to llm with credentials in create_game
+        # type=ai is mapped to type=llm with LiteLLM credentials by resolve_preset
+        # before the loop runs. Summarize only when that endpoint is present.
+        if (not skip_summary) and sum_model and config.api_base:
             api_base = config.api_base or ""
             api_key = config.api_key or ""
             if api_base and api_key:
@@ -1273,6 +1306,7 @@ async def _request_llm_move(game: GameSession, side: str, side_name: str, config
         preset=config.preset or config.name or config.model,
         rpm=config.rpm,
         tpm=config.tpm,
+        max_tool_rounds=resolve_max_tool_rounds(),
         # 走子阶段闸门：非 playing（复盘/预盘/终局/中断）时 make_move 禁用
         status_probe=lambda: game.status,
     )
@@ -1555,7 +1589,9 @@ async def _game_loop_inner(game: GameSession):
                     game, side, side_name, _choose_random_move(game, side_name)
                 )
 
-            elif config.type == "llm":
+            elif config.type in {"llm", "ai"}:
+                # ai is the LiteLLM seat. create_game maps it to type=llm; this
+                # branch also drives a session that still carries type=ai.
                 move_iccs = await _run_with_turn_timeout(
                     game, side, side_name, _request_llm_move(game, side, side_name, config)
                 )
@@ -1607,7 +1643,7 @@ async def _game_loop_inner(game: GameSession):
                 if note:
                     move_record["note"] = note
                 # Persist full turn + audience retelling (LLM only; fail-open)
-                if config.type == "llm":
+                if config.type in {"llm", "ai"}:
                     await _persist_llm_turn(
                         game, side_name, config, move_record, turn_trace=turn_trace
                     )
@@ -1680,7 +1716,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="LLM Xiangqi Arena",
-    description="Backend-only Xiangqi arena: LangGraph LLM players, MCP seat gating, LiteLLM routing.",
+    description="Backend-only Xiangqi arena: LangGraph LLM players, MCP seat gating, one OpenAI-compatible LiteLLM proxy.",
     lifespan=lifespan,
 )
 
@@ -1732,42 +1768,37 @@ async def get_presets():
     }
 
 
-def resolve_preset(config: PlayerConfig) -> PlayerConfig:
-    """If config uses a preset name, fill in details from config.yaml."""
-    if not config.preset:
-        return config
-    presets = load_model_presets()
-    entry = next((p for p in presets if p["name"] == config.preset), None)
-    if entry is None:
-        if config.type == "llm":
-            raise HTTPException(400, f"Preset '{config.preset}' not found in config.yaml")
-        return config
+# Uncommented .env.example values. A copied template must not pass the
+# missing-config check and then fail on the first model call.
+_PLACEHOLDER_API_KEYS = frozenset({"sk-xxxxxxxx"})
 
-    # External seat: a config.yaml preset declaring `type: external` is a slot
-    # for an out-of-process agent (joined via MCP tools), so it carries no
-    # api_base/key/model — only a display name.
-    if entry.get("type") == "external":
-        if config.type not in {"external", "llm"}:
-            raise HTTPException(
-                400,
-                f"Preset '{config.preset}' is an external seat; player type must be external",
-            )
-        yaml_display = str(entry.get("display_name") or "").strip()
-        incoming = (config.name or "").strip()
-        resolved_name = (
-            incoming
-            if incoming and incoming != config.preset
-            else (yaml_display or incoming or None)
-        )
-        return PlayerConfig(type="external", name=resolved_name, preset=config.preset)
 
-    if config.type == "external":
-        raise HTTPException(
-            400,
-            f"Preset '{config.preset}' is not an external seat (type={entry.get('type') or 'llm'})",
-        )
-    if config.type != "llm":
-        return config
+def _usable_api_key(api_key: Optional[str]) -> str:
+    key = (api_key or "").strip()
+    if not key or key in _PLACEHOLDER_API_KEYS:
+        return ""
+    return key
+
+
+def _litellm_env() -> tuple[str, str, str]:
+    """Shared LiteLLM proxy settings. Values are stripped; base has no trailing slash."""
+    api_base = (os.environ.get("LITELLM_API_BASE") or "").strip().rstrip("/")
+    api_key = _usable_api_key(os.environ.get("LITELLM_API_KEY"))
+    model = (os.environ.get("LITELLM_MODEL") or "").strip()
+    return api_base, api_key, model
+
+
+def _litellm_allowed_models() -> Optional[set[str]]:
+    """Optional comma-separated allowlist. Unset or blank means any model name."""
+    raw = os.environ.get("LITELLM_ALLOWED_MODELS")
+    if raw is None or not raw.strip():
+        return None
+    allowed = {part.strip() for part in raw.split(",") if part.strip()}
+    return allowed or None
+
+
+def _fill_llm_from_entry(config: PlayerConfig, entry: dict) -> PlayerConfig:
+    """Build an llm PlayerConfig from a config.yaml preset entry."""
     return PlayerConfig(
         type="llm",
         name=(
@@ -1816,6 +1847,185 @@ def resolve_preset(config: PlayerConfig) -> PlayerConfig:
         rpm=config.rpm if config.rpm is not None else entry.get("rpm"),
         tpm=config.tpm if config.tpm is not None else entry.get("tpm"),
     )
+
+
+def _resolve_ai_to_llm(config: PlayerConfig) -> PlayerConfig:
+    """Map an ``ai`` seat onto an llm player on the shared LiteLLM proxy.
+
+    The arena calls one OpenAI-compatible endpoint (``LITELLM_API_BASE`` /
+    ``LITELLM_API_KEY``). Routing to a vendor model happens in that proxy.
+    Request ``api_base`` and ``api_key`` are ignored. The model name comes
+    from the preset (or ``config.model``), then ``LITELLM_MODEL``. When
+    ``LITELLM_ALLOWED_MODELS`` is set, the resolved name must be in that list.
+    """
+    api_base, api_key, env_model = _litellm_env()
+    entry = None
+    if config.preset:
+        presets = load_model_presets()
+        entry = next((p for p in presets if p["name"] == config.preset), None)
+        if entry is None:
+            raise HTTPException(400, f"Preset '{config.preset}' not found in config.yaml")
+        if entry.get("type") == "external":
+            raise HTTPException(
+                400,
+                f"Preset '{config.preset}' is an external seat; player type must be external",
+            )
+    preset_model = str(entry.get("model") or "").strip() if entry else ""
+    model = (config.model or "").strip() or preset_model or env_model
+    missing = [
+        name
+        for name, value in (
+            ("LITELLM_API_BASE", api_base),
+            ("LITELLM_API_KEY", api_key),
+            ("LITELLM_MODEL", model),
+        )
+        if not value
+    ]
+    if missing:
+        raise HTTPException(
+            400,
+            "AI seat requires LiteLLM config: " + ", ".join(missing),
+        )
+    allowed = _litellm_allowed_models()
+    if allowed is not None and model not in allowed:
+        raise HTTPException(
+            400,
+            f"Model {model!r} is not in LITELLM_ALLOWED_MODELS",
+        )
+    if entry is None:
+        if config.context_window is None:
+            raise HTTPException(
+                400,
+                "AI seat without a preset requires context_window "
+                "(or a config.yaml preset that sets it)",
+            )
+        entry = {
+            "display_name": None,
+            "api_base": api_base,
+            "api_key": api_key,
+            "model": model,
+            "prompt_name": None,
+            "enable_thinking": True,
+            "max_completion_tokens": 8192,
+            "context_window": config.context_window,
+            "max_input_tokens": config.max_input_tokens,
+            "compress_threshold_ratio": config.compress_threshold_ratio,
+            "compress_model": config.compress_model or model,
+            "enable_reasoning_effort": False,
+            "reasoning_effort": None,
+            "rpm": None,
+            "tpm": None,
+        }
+    else:
+        entry = dict(entry)
+        entry["api_base"] = api_base
+        entry["api_key"] = api_key
+        entry["model"] = model
+    llm_request = PlayerConfig(
+        type="llm",
+        name=config.name,
+        preset=config.preset,
+        model=model,
+        prompt_name=config.prompt_name,
+        prompt_lang=config.prompt_lang,
+        enable_thinking=config.enable_thinking,
+        max_completion_tokens=config.max_completion_tokens,
+        max_output_tokens=config.max_output_tokens,
+        compress_model=config.compress_model,
+        enable_reasoning_effort=config.enable_reasoning_effort,
+        reasoning_effort=config.reasoning_effort,
+        rpm=config.rpm,
+        tpm=config.tpm,
+    )
+    try:
+        filled = _fill_llm_from_entry(llm_request, entry)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    filled.litellm = True
+    if not _usable_api_key(filled.api_key):
+        raise HTTPException(
+            400,
+            "AI seat requires LiteLLM config: LITELLM_API_KEY",
+        )
+    return filled
+
+
+def _ensure_seat_credentials(config: PlayerConfig) -> PlayerConfig:
+    """Refuse to start a model seat that would call out with no API key.
+
+    An AI/LiteLLM seat with an empty or placeholder key is resolved again
+    from the current env. Failure is HTTP 400 before ``game_loop`` runs.
+    """
+    if config.type != "ai" and not config.litellm:
+        if config.type == "llm" and (config.api_base or "").strip() and not _usable_api_key(config.api_key):
+            raise HTTPException(
+                400,
+                "Cannot play LLM seat: api_key is missing. "
+                "Refusing to call the endpoint without an API key.",
+            )
+        return config
+    if _usable_api_key(config.api_key):
+        return config
+    try:
+        return _resolve_ai_to_llm(config.model_copy(update={"type": "ai"}))
+    except HTTPException as exc:
+        detail = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
+        raise HTTPException(
+            400,
+            "Cannot play AI seat: "
+            f"{detail}. Refusing to call the proxy without an API key.",
+        ) from exc
+
+
+def _ensure_seats_playable(game: GameSession) -> None:
+    """Fill or reject model seats before start, resume, or in-memory restore."""
+    game.red_config = _ensure_seat_credentials(game.red_config)
+    game.black_config = _ensure_seat_credentials(game.black_config)
+
+
+def resolve_preset(config: PlayerConfig) -> PlayerConfig:
+    """If config uses a preset name, fill in details from config.yaml.
+
+    ``type=ai`` is mapped to ``type=llm`` using ``LITELLM_API_BASE``,
+    ``LITELLM_API_KEY``, and a model name from the preset or ``LITELLM_MODEL``.
+    """
+    if config.type == "ai":
+        return _resolve_ai_to_llm(config)
+    if not config.preset:
+        return config
+    presets = load_model_presets()
+    entry = next((p for p in presets if p["name"] == config.preset), None)
+    if entry is None:
+        if config.type == "llm":
+            raise HTTPException(400, f"Preset '{config.preset}' not found in config.yaml")
+        return config
+
+    # External seat: a config.yaml preset declaring `type: external` is a slot
+    # for an out-of-process agent (joined via MCP tools), so it carries no
+    # api_base/key/model — only a display name.
+    if entry.get("type") == "external":
+        if config.type not in {"external", "llm"}:
+            raise HTTPException(
+                400,
+                f"Preset '{config.preset}' is an external seat; player type must be external",
+            )
+        yaml_display = str(entry.get("display_name") or "").strip()
+        incoming = (config.name or "").strip()
+        resolved_name = (
+            incoming
+            if incoming and incoming != config.preset
+            else (yaml_display or incoming or None)
+        )
+        return PlayerConfig(type="external", name=resolved_name, preset=config.preset)
+
+    if config.type == "external":
+        raise HTTPException(
+            400,
+            f"Preset '{config.preset}' is not an external seat (type={entry.get('type') or 'llm'})",
+        )
+    if config.type != "llm":
+        return config
+    return _fill_llm_from_entry(config, entry)
 
 
 def _validate_player_type(config: PlayerConfig):
@@ -1899,9 +2109,11 @@ async def start_game(game_id: str):
     if game.status == "interrupted":
         raise HTTPException(400, "Game interrupted; POST /resume to continue")
 
-    # If neither side is LLM/external, the game is "local" — client runs its own
-    # loop. Server still tracks state for /api/games and writes log on /finish.
-    # External games ARE server-driven: game_loop waits on the /move queue.
+    _ensure_seats_playable(game)
+
+    # Local games (random vs random) are client-driven. llm, ai, and external
+    # seats are server-driven: game_loop plays llm/ai and waits on /move for
+    # external. POST /finish cannot overwrite a server-driven game.
     is_local = _is_local_game(game)
     if is_local:
         game.status = "playing"
@@ -1946,6 +2158,7 @@ async def resume_game(game_id: str):
         raise HTTPException(404, "Game not found")
     if game.status not in {"paused", "interrupted"}:
         raise HTTPException(400, "Game is not paused or interrupted")
+    _ensure_seats_playable(game)
     game.winner = None
     game.reason = None
     game.status = "playing"
@@ -1960,9 +2173,15 @@ async def resume_game(game_id: str):
 
 @app.post("/api/game/{game_id}/restore")
 async def restore_game(game_id: str):
-    """Load an interrupted snapshot from disk if the in-memory session is gone."""
+    """Load an interrupted snapshot from disk if the in-memory session is gone.
+
+    Snapshots do not store ``seat_tokens``. After restore, both external seats
+    are unclaimed, so either side may ``claim_seat`` first. Tokens issued
+    before the snapshot are not restored.
+    """
     if game_id in games:
         game = games[game_id]
+        _ensure_seats_playable(game)
         return {
             "status": game.status,
             "game_id": game.id,
@@ -2079,9 +2298,12 @@ async def reset_game(game_id: str):
 async def finish_game(game_id: str, req: FinishGameRequest):
     """Finalize a client-driven (local) game: replay moves on server, write log.
 
-    Idempotent — calling twice on a finished game is a no-op.
-    Refused for llm/external games so a client cannot overwrite an agent match
-    or invent a winner. This route is otherwise unauthenticated.
+    Idempotent — calling twice on a finished game is a no-op, including an
+    already-finished llm/ai/external game (returns ``already_finished`` and
+    does not rewrite history).
+    Refused while an llm, ai, or external seat is still in progress, so a
+    client cannot overwrite a server-driven match or invent a winner.
+    This route is otherwise unauthenticated.
     """
     game = games.get(game_id)
     if not game:
@@ -2096,7 +2318,7 @@ async def finish_game(game_id: str, req: FinishGameRequest):
         _http_err(
             403,
             "finish is only allowed for local games "
-            "(neither side may be llm or external)",
+            "(neither side may be llm, ai, or external)",
             error_class="auth",
         )
 
@@ -2167,10 +2389,12 @@ async def claim_seat(
 ):
     """Issue a seat token for an empty external side; embeds player contract.
 
-    The first claim needs only ``game_id``. Re-claiming an occupied seat
-    rotates the token only when the request presents that seat's current
+    The first claim needs ``game_id`` and ``side``. Re-claiming an occupied
+    seat rotates the token only when the request presents that seat's current
     token (``X-Xiangqi-Seat-Token``) or ``X-Xiangqi-Referee-Secret`` matching
-    ``XIANGQI_REFEREE_SECRET``.
+    ``XIANGQI_REFEREE_SECRET``. Both the env value and the header are
+    compared after stripping leading and trailing whitespace. An unset secret
+    never matches, including an empty header.
     """
     game = games.get(game_id)
     if not game:

@@ -1,7 +1,7 @@
 # LLM Xiangqi Arena — copy to config.yaml (gitignored) and fill locally.
 
 pikafish:
-  # Optional local engine for the eval pane / Pikafish seats.
+  # Optional local engine for the eval pane only. Not a playing seat.
   # Download a CPU-matched binary + pikafish.nnue into ./pikafish/
   eval_engine_path: ./pikafish/pikafish-vnni512
 
@@ -18,7 +18,7 @@ rate_limit:
 models: []
   # - name: my-model
   #   display_name: Panel label (optional; defaults to name)
-  #   api_base: http://localhost:4000/v1
+  #   api_base: https://llm.example/v1
   #   api_key: sk-xxxxxxxx
   #   model: your-litellm-model-id
   #   prompt_name: en

@@ -26,20 +26,22 @@
 - 除 `list_presets` / `list_games` / `get_player_brief` / 开局类工具外，对局工具必填 `seat_token`。
 - 无 token / 错 token / 代提交对方席 → `error_class=auth`（HTTP 401）。
 - 裸 REST 若带合法 token 但无 `X-Xiangqi-Mcp-Tool`，审计记为 `rest_direct`（赛后分析用，**不自动判负**）。
-- `sides.*.claimed`（state）与 `/api/games` 的 `external_seats[].joinable` 供发现空席；已 claimed 再 `claim_seat` 会**轮换** token（旧牌作废），但必须携带该席当前 `seat_token`，或裁判密钥（`XIANGQI_REFEREE_SECRET`，请求头 `X-Xiangqi-Referee-Secret`）。不带凭证的再次 claim 会被拒绝。
+- `sides.*.claimed`（state）与 `/api/games` 的 `external_seats[].joinable` 供发现空席；已 claimed 再 `claim_seat` 会**轮换** token（旧牌作废），但必须携带该席当前 `seat_token`，或裁判密钥（`XIANGQI_REFEREE_SECRET`，请求头 `X-Xiangqi-Referee-Secret`）。MCP 工具 `claim_seat` 会把可选参数 `referee_secret` 转发为该请求头，仅供裁判进程使用。环境变量与请求头都会先去掉首尾空白再比较；未设置或空密钥永远不匹配。不带凭证的再次 claim 会被拒绝。轮换之后旧 token 失效。不要把密钥或该参数交给选手 agent。选手简报只要求保存本席 `seat_token`。
+- 快照不保存 `seat_tokens`。`POST /restore` 之后双方外部席都是未入座，任何一方都可以先 claim。快照也不保存 API key。恢复后的 `ai` 席会再次读取 `LITELLM_*`（不会改用预设自己的 endpoint）。
 
 ## 远程接入
 
 ```bash
 # 对局 API（示例）
-XIANGQI_API_BASE=http://127.0.0.1:8000 .venv/bin/python -m uvicorn server:app --host 0.0.0.0 --port 8000
+XIANGQI_API_BASE=http://127.0.0.1:8000 .venv/bin/python -m uvicorn server:app --host 127.0.0.1 --port 8000
 
 # MCP streamable HTTP（远程客户端连 /mcp；须能访问上面的 API）
-XIANGQI_API_BASE=http://127.0.0.1:8000 .venv/bin/python mcp_server.py --http 8765 --host 0.0.0.0
-# 健康检查：GET http://host:8765/health （含 contract_version / remote_hint）
+XIANGQI_API_BASE=http://127.0.0.1:8000 .venv/bin/python mcp_server.py --http 8765 --host 127.0.0.1
+# 仅受信任的局域网：--host <LAN-IP>
+# 健康检查：GET http://127.0.0.1:8765/health （含 contract_version / remote_hint）
 ```
 
-**不要在不受信任的网络上绑定 `0.0.0.0`。** 控制端点（创建、开始、暂停、seek、重置、restore，以及空席的首次 claim）默认无认证。`POST /finish` 只接受本地对局，已占用席位的再次 claim 需要当前 token 或裁判密钥，但其余控制面只要端口可达即可调用。除非每个客户端都是受信任的裁判，否则请绑定 `127.0.0.1`。
+**不要在不受信任的网络上绑定 `0.0.0.0`。** 控制端点（创建、开始、暂停、resume、seek、重置、restore，以及空席的首次 claim）默认无认证。先暂停、再 seek、再 resume 可以把外部对局回退到更早的 ply，并丢掉已排队的外部着法。`POST /finish` 只接受本地对局（任一方为 `llm`、`ai` 或 `external` 都不接受），已占用席位的再次 claim 需要当前 token 或裁判密钥，但其余控制面只要端口可达即可调用。除非每个客户端都是受信任的裁判，否则请绑定 `127.0.0.1`。受信任的局域网上请绑定 `<LAN-IP>`，不要绑定全部网卡。
 
 推荐流程（与子智能体相同）：
 

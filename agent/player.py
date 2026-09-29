@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import time
 from typing import Any, AsyncIterator, Optional
 
@@ -41,10 +42,31 @@ from .memory_archive import try_write_pre_compress_snapshot
 from .turn_store import format_inject_block, load_last_turn
 
 
+class MissingApiKeyError(RuntimeError):
+    """A model call would be sent with no API key.
+
+    The OpenAI client treats ``api_key=None`` as "use ``OPENAI_API_KEY``",
+    which would send that key to whatever ``base_url`` the seat stored.
+    """
+
+
+def require_api_key(api_key: Optional[str]) -> str:
+    """Return a stripped key, or raise if it is missing or blank."""
+    if api_key is None or not str(api_key).strip():
+        raise MissingApiKeyError(
+            "Refusing to call the model endpoint without an API key"
+        )
+    return str(api_key).strip()
+
+
 REASONING_EFFORTS = frozenset(
     {"none", "minimal", "low", "medium", "high", "xhigh", "max"}
 )
 MAX_MAKE_MOVE_NUDGES = 3
+# Nth rejected make_move on one ply interrupts the game (no winner).
+DEFAULT_MAX_ILLEGAL_MOVES = 3
+MAX_ILLEGAL_MOVES_CEILING = 20
+ENV_MAX_ILLEGAL_MOVES = "XIANGQI_MAX_ILLEGAL_MOVES"
 
 _MOVE_GATE_PHASES_EN = {
     "waiting": "pre-game",
@@ -108,6 +130,48 @@ def _tool_retry_body(prompt_name: str | None) -> str:
 def should_count_missing_make_move(tool_names: list[str] | None) -> bool:
     """Count a miss only when the model produced no tool calls (plain text)."""
     return not bool(tool_names)
+
+
+def max_illegal_moves() -> int:
+    """Per-ply cap on rejected ``make_move`` calls.
+
+    ``XIANGQI_MAX_ILLEGAL_MOVES`` overrides the default (3). Values below 1
+    clamp to 1; values above 20 clamp to 20. Unset or non-numeric uses 3.
+    """
+    raw = (os.environ.get(ENV_MAX_ILLEGAL_MOVES) or "").strip()
+    if not raw:
+        return DEFAULT_MAX_ILLEGAL_MOVES
+    try:
+        value = int(raw)
+    except ValueError:
+        return DEFAULT_MAX_ILLEGAL_MOVES
+    return max(1, min(value, MAX_ILLEGAL_MOVES_CEILING))
+
+
+def handle_illegal_make_move(rejected_so_far: int) -> dict[str, Any]:
+    """Count one rejected ``make_move``. Interrupt when the per-ply cap is hit.
+
+    The seat is interrupted with no winner, the same outcome as the text-only
+    strike cap, not a forfeit. A legal ``make_move`` before the cap is played.
+    The counter is per ply and starts at zero on the next ply.
+    """
+    nxt = int(rejected_so_far or 0) + 1
+    limit = max_illegal_moves()
+    if nxt >= limit:
+        return {
+            "done": True,
+            "move": None,
+            "error": (
+                f"Failed to get a valid move: {nxt} rejected make_move "
+                f"calls on this ply (limit {limit})."
+            ),
+            "illegal_make_moves": nxt,
+        }
+    return {
+        "done": False,
+        "move": None,
+        "illegal_make_moves": nxt,
+    }
 
 
 def _current_task_cancelling() -> bool:
@@ -387,7 +451,7 @@ class LangGraphPlayer:
             )
 
         client_kwargs: dict[str, Any] = {
-            "api_key": self.api_key,
+            "api_key": require_api_key(self.api_key),
             "base_url": self.api_base,
         }
         if self.timeout is not None:
@@ -525,9 +589,20 @@ class LangGraphPlayer:
                 "error": None,
                 "done": False,
                 "make_move_misses": 0,
+                "illegal_make_moves": 0,
+                "model_rounds": 0,
             }
 
         async def call_model(state: AgentState) -> dict:
+            model_rounds = int(state.get("model_rounds") or 0) + 1
+            if model_rounds > player.max_tool_rounds:
+                return {
+                    "done": True,
+                    "error": (
+                        f"Failed to get a valid move after {player.max_tool_rounds} rounds."
+                    ),
+                    "model_rounds": model_rounds,
+                }
             raw_oai = _openai_dicts_from_state_messages(list(state.get("messages") or []))
             # Drop duplicate consecutive systems except summary ones: keep last system before last human
             oai_msgs = await player._maybe_compress_openai_messages(raw_oai)
@@ -548,6 +623,7 @@ class LangGraphPlayer:
                 synced = merge_model_messages(raw_oai, oai_msgs, new_msgs, replace=replace)
                 if synced:
                     extra["messages"] = synced
+                extra["model_rounds"] = model_rounds
                 return extra
 
             max_api_retries = 3
@@ -557,6 +633,8 @@ class LangGraphPlayer:
                 try:
                     content, tool_calls, finish_reason, reasoning_full = await player._stream_completion(oai_msgs)
                     break
+                except MissingApiKeyError as e:
+                    return pack(error=str(e), done=True)
                 except APIStatusError as e:
                     last_error_msg = f"API HTTP error: {e.status_code} - {str(e)[:200]}"
                 except APIConnectionError as e:
@@ -710,15 +788,42 @@ class LangGraphPlayer:
                 out["done"] = True
                 out["aborted"] = True
                 return out
+            illegal = int(state.get("illegal_make_moves") or 0)
+            strike_error = None
+            for result_row in round_results:
+                if result_row.get("name") != "make_move":
+                    continue
+                if is_submit_ok(str(result_row.get("content") or "")):
+                    continue
+                # Phase-gate text is an abort, not a rules rejection.
+                content = str(result_row.get("content") or "")
+                if "make_move is disabled" in content or "make_move 已禁用" in content:
+                    continue
+                strike = handle_illegal_make_move(illegal)
+                illegal = int(strike["illegal_make_moves"])
+                if strike.get("done"):
+                    strike_error = strike.get("error")
+                    break
+
+            # A legal make_move in this round is played even if earlier
+            # calls in the same round were rejected.
             if found_move:
                 out["move"] = found_move
                 out["done"] = True
+                out["illegal_make_moves"] = illegal
                 player.last_turn_trace = dict(player._turn_trace)
+                return out
+            if strike_error:
+                player.last_turn_trace = dict(player._turn_trace)
+                out["illegal_make_moves"] = illegal
+                out["done"] = True
+                out["error"] = strike_error
                 return out
             names = [
                 (tc.get("name") if isinstance(tc, dict) else getattr(tc, "name", "")) or ""
                 for tc in tool_calls
             ]
+            out["illegal_make_moves"] = illegal
             if not should_count_missing_make_move(names):
                 out["done"] = False
                 return out
@@ -783,7 +888,9 @@ class LangGraphPlayer:
         graph = self._build_graph(board, side).compile(checkpointer=checkpointer)
         config = {
             "configurable": {"thread_id": self.thread_id},
-            "recursion_limit": max(400, self.max_tool_rounds * 2),
+            # Each model/tool cycle is a few graph steps. No floor above the
+            # per-ply cap, or a stuck seat can keep calling the proxy.
+            "recursion_limit": self.max_tool_rounds * 4 + 8,
         }
 
         live_q: asyncio.Queue = asyncio.Queue(maxsize=8)
@@ -802,6 +909,9 @@ class LangGraphPlayer:
                         "move": None,
                         "error": None,
                         "done": False,
+                        "make_move_misses": 0,
+                        "illegal_make_moves": 0,
+                        "model_rounds": 0,
                     },
                     config,
                 )

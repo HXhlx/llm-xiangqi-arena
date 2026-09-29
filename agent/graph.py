@@ -17,6 +17,10 @@ class AgentState(TypedDict, total=False):
     # Ephemeral control flags for one invocation (not critical to persist long-term)
     done: bool
     make_move_misses: int
+    # Rejected make_move calls on this ply. Reset at the start of request_move.
+    illegal_make_moves: int
+    # Model invocations on this ply. Reset at the start of request_move.
+    model_rounds: int
     # 走子阶段闸门触发：对局已非 playing（复盘/预盘/终局/中断），
     # 本回合被终止且不视为模型失败
     aborted: bool

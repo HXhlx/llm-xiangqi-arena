@@ -31,17 +31,19 @@ Rule delivery (soft policy, not a sandbox):
 - Game tools other than list/brief/open require `seat_token`.
 - Missing / wrong token → `error_class=auth` (HTTP 401).
 - Bare REST with a valid token but no `X-Xiangqi-Mcp-Tool` is audited as `rest_direct` (not an auto-loss).
-- Re-`claim_seat` on an already claimed seat **rotates** the token only when the request carries that seat's current `seat_token`, or the referee secret (`XIANGQI_REFEREE_SECRET` via `X-Xiangqi-Referee-Secret`). A bare re-claim is rejected and the old token stays valid.
+- Re-`claim_seat` on an already claimed seat **rotates** the token only when the request carries that seat's current `seat_token`, or the referee secret (`XIANGQI_REFEREE_SECRET` via `X-Xiangqi-Referee-Secret`). The MCP `claim_seat` tool forwards optional `referee_secret` as that header for the referee process. Both the env value and the header are compared after stripping whitespace; an unset or empty secret never matches. A bare re-claim is rejected and the old token stays valid. After rotation the previous token is rejected. Do not hand the secret, or that parameter, to player agents. Player briefs tell a seat to keep only its own `seat_token`.
+- Snapshots do not store `seat_tokens`. After `POST /restore`, both external seats are unclaimed, so either side can be claimed first. Snapshots also omit API keys. A restored `ai` seat is bound again from `LITELLM_*` (not from a preset's own endpoint).
 
 ## Remote access
 
 ```bash
-XIANGQI_API_BASE=http://127.0.0.1:8000 .venv/bin/python -m uvicorn server:app --host 0.0.0.0 --port 8000
-XIANGQI_API_BASE=http://127.0.0.1:8000 .venv/bin/python mcp_server.py --http 8765 --host 0.0.0.0
-# health: GET http://host:8765/health
+XIANGQI_API_BASE=http://127.0.0.1:8000 .venv/bin/python -m uvicorn server:app --host 127.0.0.1 --port 8000
+XIANGQI_API_BASE=http://127.0.0.1:8000 .venv/bin/python mcp_server.py --http 8765 --host 127.0.0.1
+# Trusted LAN only: --host <LAN-IP>
+# health: GET http://127.0.0.1:8765/health
 ```
 
-**Do not bind `0.0.0.0` on an untrusted network.** Match control endpoints (create, start, pause, seek, reset, restore, and the first claim of an empty seat) are unauthenticated. `POST /finish` is limited to local games, and re-claim of an occupied seat needs the current token or the referee secret, but the rest of the control plane is open to anyone who can reach the port. Prefer `127.0.0.1` unless every client is a trusted referee.
+**Do not bind `0.0.0.0` on an untrusted network.** Match control endpoints (create, start, pause, resume, seek, reset, restore, and the first claim of an empty seat) are unauthenticated. Pause, then seek, then resume can roll an external game back to an earlier ply and drop queued moves. `POST /finish` is limited to local games (neither side may be `llm`, `ai`, or `external`), and re-claim of an occupied seat needs the current token or the referee secret, but the rest of the control plane is open to anyone who can reach the port. Prefer `127.0.0.1` unless every client is a trusted referee. On a trusted LAN, bind `<LAN-IP>` rather than every interface.
 
 Do not write the opponent's `seat_token` into shared config.
 

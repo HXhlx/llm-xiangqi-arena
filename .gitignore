@@ -36,7 +36,8 @@ log_bak/
 pikafish/*
 !pikafish/README.md
 
-# Local agent / IDE caches
+# Generic local tool/agent directories. Do not add private names here.
+.claude/
 .agents/
-.claude
 archive/
+

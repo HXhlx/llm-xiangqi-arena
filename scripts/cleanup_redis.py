@@ -39,6 +39,22 @@ def load_dotenv() -> None:
         os.environ.setdefault(key.strip(), value.strip())
 
 
+def resolve_api_base(environ: dict[str, str] | None = None) -> str:
+    """Match server URL. ``XIANGQI_API_BASE`` wins; ``XIANGQI_BASE`` is legacy."""
+    env = os.environ if environ is None else environ
+    primary = (env.get("XIANGQI_API_BASE") or "").strip().rstrip("/")
+    legacy = (env.get("XIANGQI_BASE") or "").strip().rstrip("/")
+    if primary:
+        return primary
+    if legacy:
+        print(
+            "warning: XIANGQI_BASE is deprecated; set XIANGQI_API_BASE",
+            file=sys.stderr,
+        )
+        return legacy
+    return "http://127.0.0.1:8000"
+
+
 def fetch_api_games(base: str) -> list[dict]:
     url = base.rstrip("/") + "/api/games"
     try:
@@ -64,7 +80,7 @@ def main(argv: list[str] | None = None) -> int:
         print(exc)
         return 2
 
-    base = os.environ.get("XIANGQI_BASE", "http://127.0.0.1:8010")
+    base = resolve_api_base()
     try:
         games = fetch_api_games(base)
     except GamesFetchError as exc:

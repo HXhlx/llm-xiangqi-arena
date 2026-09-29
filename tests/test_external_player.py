@@ -92,6 +92,16 @@ async def _stop_loop(task: asyncio.Task) -> None:
 
 
 class ExternalMoveEndpointTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self._prev_lang = os.environ.get("XIANGQI_LANG")
+        os.environ.pop("XIANGQI_LANG", None)
+
+    def tearDown(self):
+        if self._prev_lang is None:
+            os.environ.pop("XIANGQI_LANG", None)
+        else:
+            os.environ["XIANGQI_LANG"] = self._prev_lang
+
     async def test_illegal_move_rejected_with_retry_info(self):
         game = _ext_vs_random()
         server.games[game.id] = game
@@ -647,11 +657,12 @@ class PreviewAndAuditTests(unittest.IsolatedAsyncioTestCase):
 
 
 def _local_game(gid: str = "local1") -> server.GameSession:
+    """Random vs random: the only local pairing that may POST /finish."""
     return server.GameSession(
         gid,
         DEFAULT_FEN,
         server.PlayerConfig(type="random", name="Red"),
-        server.PlayerConfig(type="ai", name="Black"),
+        server.PlayerConfig(type="random", name="Black"),
     )
 
 
@@ -701,6 +712,87 @@ class FinishTrustTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(ctx.exception.status_code, 403)
         self.assertEqual(game.status, "playing")
         self.assertEqual(game.move_history, [])
+
+    async def test_finish_rejects_black_llm_only(self):
+        game = server.GameSession(
+            "llmblack",
+            DEFAULT_FEN,
+            server.PlayerConfig(type="random"),
+            server.PlayerConfig(type="llm", model="m", api_base="https://llm.example/v1", api_key="k"),
+        )
+        game.status = "playing"
+        server.games[game.id] = game
+        self.addCleanup(lambda: server.games.pop(game.id, None))
+        with self.assertRaises(HTTPException) as ctx:
+            await server.finish_game(
+                game.id, server.FinishGameRequest(moves=["h2e2"], winner="red", reason="forged")
+            )
+        self.assertEqual(ctx.exception.status_code, 403)
+        self.assertIn("ai", str(ctx.exception.detail))
+        self.assertEqual(game.status, "playing")
+        self.assertEqual(game.move_history, [])
+
+    async def test_finish_rejects_llm_vs_external(self):
+        game = server.GameSession(
+            "llmex",
+            DEFAULT_FEN,
+            server.PlayerConfig(type="llm", model="m", api_base="https://llm.example/v1", api_key="k"),
+            EXTERNAL_BLACK,
+        )
+        game.status = "playing"
+        game.move_history.append({"move": "a0a1", "side": "red"})
+        server.games[game.id] = game
+        self.addCleanup(lambda: server.games.pop(game.id, None))
+        with self.assertRaises(HTTPException) as ctx:
+            await server.finish_game(
+                game.id, server.FinishGameRequest(moves=[], winner="black", reason="forged")
+            )
+        self.assertEqual(ctx.exception.status_code, 403)
+        self.assertEqual(game.status, "playing")
+        self.assertEqual(game.move_history, [{"move": "a0a1", "side": "red"}])
+
+    async def test_finish_rejects_ai_seat(self):
+        game = server.GameSession(
+            "aifin",
+            DEFAULT_FEN,
+            server.PlayerConfig(type="random"),
+            server.PlayerConfig(type="ai", name="Black"),
+        )
+        game.status = "playing"
+        server.games[game.id] = game
+        self.addCleanup(lambda: server.games.pop(game.id, None))
+        with self.assertRaises(HTTPException) as ctx:
+            await server.finish_game(
+                game.id, server.FinishGameRequest(moves=["h2e2"], winner="red", reason="forged")
+            )
+        self.assertEqual(ctx.exception.status_code, 403)
+        self.assertIn("ai", str(ctx.exception.detail))
+        self.assertEqual(game.status, "playing")
+        self.assertEqual(game.move_history, [])
+
+    async def test_finish_already_finished_agent_game_does_not_rewrite(self):
+        game = server.GameSession(
+            "llmdone",
+            DEFAULT_FEN,
+            server.PlayerConfig(type="llm", model="m", api_base="https://llm.example/v1", api_key="k"),
+            server.PlayerConfig(type="external"),
+        )
+        game.status = "finished"
+        game.winner = "red"
+        game.reason = "checkmate"
+        history = [{"move": "h2e2", "side": "red"}]
+        game.move_history = list(history)
+        server.games[game.id] = game
+        self.addCleanup(lambda: server.games.pop(game.id, None))
+        with patch.object(server, "clear_game_threads", AsyncMock()):
+            result = await server.finish_game(
+                game.id, server.FinishGameRequest(moves=["b2e2"], winner="black", reason="forged")
+            )
+        self.assertEqual(result["status"], "already_finished")
+        self.assertEqual(game.status, "finished")
+        self.assertEqual(game.winner, "red")
+        self.assertEqual(game.reason, "checkmate")
+        self.assertEqual(game.move_history, history)
 
 
 class ClaimSeatTrustTests(unittest.IsolatedAsyncioTestCase):
@@ -804,6 +896,154 @@ class ClaimSeatTrustTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertNotEqual(second["seat_token"], token)
         self.assertEqual(game.seat_tokens["red"], second["seat_token"])
+
+    async def test_reclaim_secret_unset_and_empty_header_rejected(self):
+        game = self._game()
+        first = await server.claim_seat(game.id, server.ClaimSeatRequest(side="red"))
+        token = first["seat_token"]
+        with self.assertRaises(HTTPException) as ctx:
+            await server.claim_seat(
+                game.id,
+                server.ClaimSeatRequest(side="red"),
+                x_xiangqi_seat_token="",
+                x_xiangqi_referee_secret="",
+            )
+        self.assertEqual(ctx.exception.status_code, 401)
+        with self.assertRaises(HTTPException) as ctx2:
+            await server.claim_seat(
+                game.id,
+                server.ClaimSeatRequest(side="red"),
+                x_xiangqi_referee_secret="   ",
+            )
+        self.assertEqual(ctx2.exception.status_code, 401)
+        self.assertEqual(game.seat_tokens["red"], token)
+
+    async def test_reclaim_wrong_ascii_token_rejected(self):
+        game = self._game()
+        first = await server.claim_seat(game.id, server.ClaimSeatRequest(side="red"))
+        token = first["seat_token"]
+        with self.assertRaises(HTTPException) as ctx:
+            await server.claim_seat(
+                game.id,
+                server.ClaimSeatRequest(side="red"),
+                x_xiangqi_seat_token="wrong-ascii-token",
+            )
+        self.assertEqual(ctx.exception.status_code, 401)
+        self.assertEqual(ctx.exception.detail["error_class"], "auth")
+        self.assertEqual(game.seat_tokens["red"], token)
+
+    async def test_rotated_away_token_rejected(self):
+        game = self._game()
+        first = await server.claim_seat(game.id, server.ClaimSeatRequest(side="red"))
+        old = first["seat_token"]
+        second = await server.claim_seat(
+            game.id,
+            server.ClaimSeatRequest(side="red"),
+            x_xiangqi_seat_token=old,
+        )
+        with self.assertRaises(HTTPException) as ctx:
+            await server.claim_seat(
+                game.id,
+                server.ClaimSeatRequest(side="red"),
+                x_xiangqi_seat_token=old,
+            )
+        self.assertEqual(ctx.exception.status_code, 401)
+        self.assertEqual(game.seat_tokens["red"], second["seat_token"])
+        game.status = "playing"
+        with self.assertRaises(HTTPException) as moved:
+            await _move(game.id, "red", "h2e2", old)
+        self.assertEqual(moved.exception.status_code, 401)
+
+    async def test_referee_secret_whitespace_is_stripped(self):
+        os.environ["XIANGQI_REFEREE_SECRET"] = "  referee-test-secret\n"
+        game = self._game()
+        first = await server.claim_seat(game.id, server.ClaimSeatRequest(side="black"))
+        token = first["seat_token"]
+        second = await server.claim_seat(
+            game.id,
+            server.ClaimSeatRequest(side="black"),
+            x_xiangqi_referee_secret="\treferee-test-secret  ",
+        )
+        self.assertNotEqual(second["seat_token"], token)
+        self.assertEqual(game.seat_tokens["black"], second["seat_token"])
+
+
+class RefereeSecretHeaderTests(unittest.IsolatedAsyncioTestCase):
+    """HTTP layer: FastAPI maps X-Xiangqi-Referee-Secret; old tokens die after rotation."""
+
+    def setUp(self):
+        self._prev_secret = os.environ.get("XIANGQI_REFEREE_SECRET")
+        os.environ["XIANGQI_REFEREE_SECRET"] = "referee-test-secret"
+        self._prev_lang = os.environ.get("XIANGQI_LANG")
+        os.environ.pop("XIANGQI_LANG", None)
+
+    def tearDown(self):
+        if self._prev_secret is None:
+            os.environ.pop("XIANGQI_REFEREE_SECRET", None)
+        else:
+            os.environ["XIANGQI_REFEREE_SECRET"] = self._prev_secret
+        if self._prev_lang is None:
+            os.environ.pop("XIANGQI_LANG", None)
+        else:
+            os.environ["XIANGQI_LANG"] = self._prev_lang
+
+    async def test_secret_header_rotates_and_old_token_rejected(self):
+        import httpx
+
+        transport = httpx.ASGITransport(app=server.app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            created = await client.post(
+                "/api/game/create",
+                json={
+                    "red": {"type": "external", "name": "Red"},
+                    "black": {"type": "external", "name": "Black"},
+                },
+            )
+            self.assertEqual(created.status_code, 200, created.text)
+            gid = created.json()["game_id"]
+            self.addCleanup(lambda: server.games.pop(gid, None))
+
+            first = await client.post(f"/api/game/{gid}/claim-seat", json={"side": "red"})
+            self.assertEqual(first.status_code, 200, first.text)
+            old = first.json()["seat_token"]
+
+            second = await client.post(
+                f"/api/game/{gid}/claim-seat",
+                json={"side": "red"},
+                headers={"X-Xiangqi-Referee-Secret": "  referee-test-secret  "},
+            )
+            self.assertEqual(second.status_code, 200, second.text)
+            new = second.json()["seat_token"]
+            self.assertTrue(new)
+            self.assertNotEqual(new, old)
+
+            stale_claim = await client.post(
+                f"/api/game/{gid}/claim-seat",
+                json={"side": "red"},
+                headers={"X-Xiangqi-Seat-Token": old},
+            )
+            self.assertEqual(stale_claim.status_code, 401)
+
+            stale_move = await client.post(
+                f"/api/game/{gid}/move",
+                json={"side": "red", "move": "h2e2"},
+                headers={
+                    "X-Xiangqi-Seat-Token": old,
+                    "X-Xiangqi-Mcp-Tool": "submit_move",
+                },
+            )
+            self.assertEqual(stale_move.status_code, 401)
+
+            authed_move = await client.post(
+                f"/api/game/{gid}/move",
+                json={"side": "red", "move": "h2e2"},
+                headers={
+                    "X-Xiangqi-Seat-Token": new,
+                    "X-Xiangqi-Mcp-Tool": "submit_move",
+                },
+            )
+            self.assertEqual(authed_move.status_code, 400)
+            self.assertEqual(authed_move.json()["detail"]["error_class"], "state")
 
 
 class UserFacingCopyTests(unittest.TestCase):

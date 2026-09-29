@@ -54,7 +54,22 @@ def board_diagram(board: Board) -> str:
     return "\n".join(lines)
 
 
-def file_legend(side: str) -> str:
+def file_legend(side: str, *, lang: str = "zh") -> str:
+    """File numbering for player prompts.
+
+    Tool output stays on the Chinese legend. The English player prompt passes
+    ``lang="en"`` so it does not embed ``路：红九路``.
+    """
+    if str(lang or "zh").strip().lower() == "en":
+        if side == "b":
+            files = "Black file 1 (a) through Black file 9 (i)"
+        else:
+            files = "Red file 9 (a) through Red file 1 (i)"
+        return (
+            f"Files: {files}. Red numbers files from right to left (1 through 9); "
+            "Black numbers files from left to right (1 through 9). "
+            "Palace: Red d0-f2, Black d7-f9. The river is between ranks 4 and 5."
+        )
     if side == "b":
         files = "黑一路(a)…黑九路(i)"
     else:
@@ -115,8 +130,12 @@ def _legal_captures(board: Board) -> list[str]:
     return out
 
 
-def own_pieces(board: Board, side: str) -> str:
-    """Own-side piece coordinates only — not legal moves."""
+def own_pieces(board: Board, side: str, *, lang: str = "zh") -> str:
+    """Own-side piece coordinates only — not legal moves.
+
+    Piece-face CJK stays. The empty-list fallback is ``none`` for the English
+    prompt and ``无`` otherwise.
+    """
     items: list[str] = []
     for row in range(10):
         for col in range(9):
@@ -124,7 +143,10 @@ def own_pieces(board: Board, side: str) -> str:
             if not piece or board.piece_color(piece) != side:
                 continue
             items.append(f"{_color_zh(piece)}{PIECE_NAMES_ZH.get(piece, piece)} {_sq(col, row)}")
-    return "，".join(items) if items else "无"
+    english = str(lang or "zh").strip().lower() == "en"
+    if not items:
+        return "none" if english else "无"
+    return (", ".join(items)) if english else "，".join(items)
 
 
 def _tokens(value: object) -> list[str]:

@@ -23,7 +23,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-os.environ.setdefault("XIANGQI_API_BASE", "http://127.0.0.1:18010")
+os.environ.setdefault("XIANGQI_API_BASE", "http://127.0.0.1:8000")
 
 import asyncio
 
@@ -200,7 +200,7 @@ Sub-agents, two Cursor sessions, and remote MCP clients all take the same path:
 
 async def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--api-base", default=os.environ.get("XIANGQI_API_BASE", "http://127.0.0.1:18010"))
+    ap.add_argument("--api-base", default=os.environ.get("XIANGQI_API_BASE", "http://127.0.0.1:8000"))
     ap.add_argument("--work-dir", default="/tmp/xiangqi-mcp-llm-duel")
     ap.add_argument("--red-name", default="赤练")
     ap.add_argument("--black-name", default="玄戈")

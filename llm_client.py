@@ -5,6 +5,7 @@ Supports OpenAI-compatible endpoints via configurable base_url.
 
 import asyncio
 import json
+import os
 import re
 
 from openai import APIConnectionError, APIStatusError, AsyncOpenAI
@@ -70,7 +71,30 @@ PIECE_LABEL_ZH = {
     "k": "黑将", "a": "黑士", "b": "黑象", "n": "黑马", "r": "黑车", "c": "黑炮", "p": "黑卒",
 }
 
-DEFAULT_MAX_TOOL_ROUNDS = 10000
+# Per-ply ceiling on model/tool rounds. Rejected make_move calls and
+# text-only strikes stop a ply sooner; this bound stops every other loop.
+# The match server reads XIANGQI_MAX_TOOL_ROUNDS when it builds a seat.
+DEFAULT_MAX_TOOL_ROUNDS = 32
+MIN_MAX_TOOL_ROUNDS = 4
+MAX_MAX_TOOL_ROUNDS_CEILING = 128
+ENV_MAX_TOOL_ROUNDS = "XIANGQI_MAX_TOOL_ROUNDS"
+
+
+def resolve_max_tool_rounds() -> int:
+    """Per-ply model/tool-round cap from ``XIANGQI_MAX_TOOL_ROUNDS``.
+
+    Unset or non-numeric uses 32. Values clamp to 4..128. The server passes
+    the result into ``LangGraphPlayer``; a direct constructor argument is
+    left alone.
+    """
+    raw = (os.environ.get(ENV_MAX_TOOL_ROUNDS) or "").strip()
+    if not raw:
+        return DEFAULT_MAX_TOOL_ROUNDS
+    try:
+        value = int(raw)
+    except ValueError:
+        return DEFAULT_MAX_TOOL_ROUNDS
+    return max(MIN_MAX_TOOL_ROUNDS, min(value, MAX_MAX_TOOL_ROUNDS_CEILING))
 
 
 def _piece_label(piece: str | None) -> str:
@@ -165,13 +189,14 @@ def _build_prompt_params(board: Board, side: str, prompt_name: str | None = None
     side_name = "Red" if side == "w" else "Black"
     side_name_zh = "红方" if side == "w" else "黑方"
     prompt_profile = get_prompt_profile(prompt_name)
+    legend_lang = "zh" if _is_zh_profile(prompt_profile) else "en"
     params = dict(
         side_name=side_name,
         side_name_zh=side_name_zh,
         fen=board.to_fen(),
         last_opponent_move=_get_last_opponent_move(board) or _opening_move_label(prompt_profile),
-        file_legend=file_legend(side),
-        own_pieces=own_pieces(board, side),
+        file_legend=file_legend(side, lang=legend_lang),
+        own_pieces=own_pieces(board, side, lang=legend_lang),
         cursor_status=_cursor_status_copy(prompt_profile),
     )
     return prompt_profile, params

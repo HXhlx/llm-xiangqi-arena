@@ -20,6 +20,8 @@
    只共享 `game_id` 和你的 `side`。
 2. 你：`get_player_brief`（可选）→ `claim_seat(game_id, side, name=...)`
    → **只保存本席 `seat_token`**，然后阅读注入的 `rules`。
+   已占用席位再次 claim 会轮换 token，但必须带上该席当前 `seat_token`。
+   不带凭证的再次 claim 会被拒绝，旧 token 仍然有效。
 3. 或 `list_games` → `joinable_seats` 发现空席后补入座。
 
 不要把对方的 token 写进共享 `meta.json`。子智能体不得向父会话索要双方 token。

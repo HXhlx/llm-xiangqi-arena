@@ -73,8 +73,11 @@ class TestBoardDiagram(unittest.TestCase):
         prompt = build_system_prompt(b, "w", "en")
         self.assertIn("none yet (opening)", prompt)
         self.assertIn("Working board starts at live", prompt)
+        self.assertIn("Red file 9 (a)", prompt)
         self.assertNotIn("尚无", prompt)
         self.assertNotIn("开局工作盘", prompt)
+        self.assertNotIn("红九路", prompt)
+        self.assertNotIn("路：", prompt)
 
     def test_engine_fen_unchanged(self):
         b = Board(START_FEN)
@@ -109,8 +112,9 @@ class TestObserveTools(unittest.TestCase):
         self.assertIn("以下为工作盘轮走方=红", out)
         self.assertNotIn("Side to move", out)
 
-    def test_tool_round_ceiling_is_not_a_product_cap(self):
-        self.assertGreaterEqual(DEFAULT_MAX_TOOL_ROUNDS, 10000)
+    def test_tool_round_ceiling_is_a_per_ply_bound(self):
+        self.assertGreaterEqual(DEFAULT_MAX_TOOL_ROUNDS, 8)
+        self.assertLessEqual(DEFAULT_MAX_TOOL_ROUNDS, 64)
 
 
 if __name__ == "__main__":

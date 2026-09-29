@@ -34,6 +34,7 @@ API_BASE = os.environ.get("XIANGQI_API_BASE", "http://127.0.0.1:8000").rstrip("/
 DEFAULT_FEN = "rnbakabnr/9/1c5c1/p1p1p1p1p/9/9/P1P1P1P1P/1C5C1/9/RNBAKABNR w"
 SEAT_HEADER = "X-Xiangqi-Seat-Token"
 MCP_TOOL_HEADER = "X-Xiangqi-Mcp-Tool"
+REFEREE_HEADER = "X-Xiangqi-Referee-Secret"
 
 # Test injection: set to httpx.MockTransport so _api stays offline.
 _TEST_TRANSPORT: Optional[httpx.AsyncBaseTransport] = None
@@ -53,6 +54,7 @@ async def _api(
     timeout: float = 30.0,
     seat_token: Optional[str] = None,
     mcp_tool: Optional[str] = None,
+    referee_secret: Optional[str] = None,
 ) -> tuple[int, Any]:
     """One REST call to the duel server; returns (status_code, payload)."""
     headers: dict[str, str] = {}
@@ -60,6 +62,8 @@ async def _api(
         headers[SEAT_HEADER] = str(seat_token)
     if mcp_tool:
         headers[MCP_TOOL_HEADER] = str(mcp_tool)
+    if referee_secret:
+        headers[REFEREE_HEADER] = str(referee_secret)
     async with httpx.AsyncClient(
         base_url=API_BASE, timeout=timeout, transport=_TEST_TRANSPORT
     ) as client:
@@ -176,6 +180,7 @@ async def _claim(
     side: str,
     name: Optional[str] = None,
     seat_token: Optional[str] = None,
+    referee_secret: Optional[str] = None,
 ) -> dict:
     body: dict[str, Any] = {"side": side}
     if name:
@@ -186,6 +191,7 @@ async def _claim(
         json=body,
         seat_token=seat_token,
         mcp_tool="claim_seat",
+        referee_secret=referee_secret,
     )
     if status != 200:
         return _fail(payload, status, game_id=game_id, side=side)
@@ -379,7 +385,7 @@ async def list_games() -> dict:
         "open_seats": open_seats,
         "joinable_seats": joinable_seats,
         "hint": (
-            "Remote sit: pick a side from joinable_seats → claim_seat. "
+            "Remote sit: pick a side from joinable_seats → claim_seat(game_id, side). "
             "Re-claim of an occupied seat rotates the token only when you pass "
             "that seat's current seat_token."
         ),
@@ -444,17 +450,18 @@ async def claim_seat(
     side: str,
     name: Optional[str] = None,
     seat_token: Optional[str] = None,
+    referee_secret: Optional[str] = None,
 ) -> dict:
     """Claim an empty external seat, or rotate one you already hold.
 
-    The first claim needs only game_id and side. Re-claim of an occupied seat
-    requires that seat's current seat_token. The response includes player_brief
-    and rules.
+    The first claim needs game_id and side. Re-claim of an occupied seat
+    requires that seat's current seat_token. The response includes
+    player_brief and rules.
     """
     body_side = str(side or "").strip().lower()
     if body_side not in {"red", "black"}:
         return {"ok": False, "error": 'side must be "red" or "black"', "error_class": "rules"}
-    return await _claim(game_id, body_side, name, seat_token)
+    return await _claim(game_id, body_side, name, seat_token, referee_secret)
 
 
 @mcp.tool

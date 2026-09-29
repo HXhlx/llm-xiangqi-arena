@@ -8,12 +8,36 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # "unset" clears XIANGQI_LANG so the default English track is tested.
+        # The openai pin is a third job, not a cross product with zh.
+        include:
+          - xiangqi_lang: unset
+            openai_pin: ""
+          - xiangqi_lang: zh
+            openai_pin: ""
+          - xiangqi_lang: unset
+            openai_pin: "openai==1.109.1"
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Install
-        run: pip install -r requirements.txt
+        env:
+          OPENAI_PIN: ${{ matrix.openai_pin }}
+        run: |
+          pip install -r requirements.txt
+          if [ -n "$OPENAI_PIN" ]; then
+            pip install "$OPENAI_PIN"
+          fi
       - name: Unit tests (duel / MCP / prompts)
-        run: python -m unittest discover -s tests -q
+        env:
+          XIANGQI_LANG: ${{ matrix.xiangqi_lang }}
+        run: |
+          if [ "$XIANGQI_LANG" = "unset" ]; then
+            unset XIANGQI_LANG
+          fi
+          python -m unittest discover -s tests -q

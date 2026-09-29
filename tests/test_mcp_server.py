@@ -42,6 +42,8 @@ def _json_response(payload: Any, status: int = 200) -> httpx.Response:
 
 class McpToolTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
+        self._prev_lang = os.environ.get("XIANGQI_LANG")
+        os.environ.pop("XIANGQI_LANG", None)
         self.routes: dict[str, Callable[[httpx.Request], httpx.Response]] = {}
         self.requests: list[httpx.Request] = []
 
@@ -55,6 +57,12 @@ class McpToolTests(unittest.IsolatedAsyncioTestCase):
         self._prev_transport = mcp_server._TEST_TRANSPORT
         mcp_server._TEST_TRANSPORT = httpx.MockTransport(handler)
         self.addCleanup(setattr, mcp_server, "_TEST_TRANSPORT", self._prev_transport)
+
+    def tearDown(self):
+        if self._prev_lang is None:
+            os.environ.pop("XIANGQI_LANG", None)
+        else:
+            os.environ["XIANGQI_LANG"] = self._prev_lang
 
     def route(self, method: str, path: str, fn: Callable[[httpx.Request], httpx.Response]):
         self.routes[f"{method} {path}"] = fn
@@ -456,6 +464,8 @@ class DuelLifecycleTests(McpToolTests):
         self.assertTrue(seat["joinable"])
         self.assertTrue(seat["waiting_for_side"])
         self.assertEqual(len(out["joinable_seats"]), 1)
+        self.assertNotIn("referee_secret", out["hint"])
+        self.assertNotIn("referee_secret", mcp_server.claim_seat.__doc__ or "")
 
     async def test_resign_tool(self):
         self.route("POST", "/api/game/g1/resign", lambda req: _json_response({
@@ -544,6 +554,18 @@ class DuelLifecycleTests(McpToolTests):
         req = self._request("POST", "/api/game/g1/claim-seat")
         self.assertEqual(req.headers.get("x-xiangqi-seat-token"), "old-token")
         self.assertEqual(req.headers.get("x-xiangqi-mcp-tool"), "claim_seat")
+
+    async def test_claim_seat_forwards_referee_secret_header(self):
+        self.route("POST", "/api/game/g1/claim-seat", lambda req: _json_response({
+            "ok": True, "game_id": "g1", "side": "red", "seat_token": "rotated",
+        }))
+        out = await mcp_server.claim_seat(
+            "g1", "red", seat_token="old-token", referee_secret="  referee-test-secret  "
+        )
+        self.assertEqual(out["seat_token"], "rotated")
+        req = self._request("POST", "/api/game/g1/claim-seat")
+        self.assertEqual(req.headers.get("x-xiangqi-referee-secret"), "  referee-test-secret  ")
+        self.assertEqual(req.headers.get("x-xiangqi-seat-token"), "old-token")
 
     async def test_create_duel_auto_claim_false_skips_tokens(self):
         self.route("POST", "/api/game/create", lambda req: _json_response({

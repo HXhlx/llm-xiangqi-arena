@@ -11,6 +11,7 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
+import agent.locale as locale
 from agent.locale import get_lang
 from agent.player import LangGraphPlayer, position_update_label
 from mcp_contract import brief_path, load_player_brief
@@ -37,6 +38,10 @@ class ChineseBriefTests(unittest.TestCase):
         self.assertIn("Never write the opponent's token", en)
         self.assertIn("只保存本席 `seat_token`", zh)
         self.assertIn("不要把对方的 token 写进共享", zh)
+        self.assertIn("当前 `seat_token`", zh)
+        for text in (en, zh):
+            self.assertNotIn("referee_secret", text)
+            self.assertNotIn("X-Xiangqi-Referee-Secret", text)
 
     def test_brief_path_follows_lang(self):
         prev = os.environ.get("XIANGQI_LANG")
@@ -144,6 +149,38 @@ class DefaultPromptLocaleTests(unittest.TestCase):
         self.assertEqual(position_update_label("en"), "[Position update]")
 
 
+class UnknownLangFallbackTests(unittest.TestCase):
+    def setUp(self):
+        self._prev = os.environ.get("XIANGQI_LANG")
+
+    def tearDown(self):
+        if self._prev is None:
+            os.environ.pop("XIANGQI_LANG", None)
+        else:
+            os.environ["XIANGQI_LANG"] = self._prev
+
+    def test_fr_and_zh_tw_warn_once_and_fall_back_to_en(self):
+        locale._warned_unknown_langs.clear()
+        for raw in ("fr", "zh-TW"):
+            os.environ["XIANGQI_LANG"] = raw
+            with self.assertLogs("agent.locale", level="WARNING") as captured:
+                self.assertEqual(get_lang(), "en")
+            blob = "\n".join(captured.output)
+            self.assertIn("falling back to en", blob)
+            self.assertIn(raw.strip().lower(), blob)
+            with self.assertNoLogs("agent.locale", level="WARNING"):
+                self.assertEqual(get_lang(), "en")
+                self.assertEqual(get_lang(), "en")
+
+    def test_known_and_blank_values_do_not_warn(self):
+        os.environ["XIANGQI_LANG"] = "zh"
+        with self.assertNoLogs("agent.locale", level="WARNING"):
+            self.assertEqual(get_lang(), "zh")
+        os.environ["XIANGQI_LANG"] = "   "
+        with self.assertNoLogs("agent.locale", level="WARNING"):
+            self.assertEqual(get_lang(), "en")
+
+
 class AgentsLocaleDocsTests(unittest.TestCase):
     def test_agents_md_documents_chinese_observe_labels(self):
         text = (Path(PROJECT_ROOT) / "AGENTS.md").read_text(encoding="utf-8")
@@ -166,8 +203,17 @@ class AgentsLocaleDocsTests(unittest.TestCase):
         readme = (Path(PROJECT_ROOT) / "README.md").read_text(encoding="utf-8")
         self.assertIn("unauthenticated", readme.lower())
         self.assertIn("XIANGQI_REFEREE_SECRET", readme)
+        self.assertIn("do not hand it", readme.lower())
+        self.assertIn("LITELLM_ALLOWED_MODELS", readme)
+        self.assertIn("spend the shared", readme.lower())
+        self.assertIn("routing happens in the proxy", readme.lower())
+        self.assertNotIn("OpenAI-compatible router", readme)
+        self.assertNotIn("401 unit tests", readme)
         self.assertIn("local games", readme)
         self.assertNotIn("Bare REST without a token cannot move", readme)
+        scope = (Path(PROJECT_ROOT) / "SCOPE.md").read_text(encoding="utf-8")
+        self.assertIn("routing happens in the proxy", scope.lower())
+        self.assertNotIn("401 unit tests", scope)
 
     def test_english_contract_has_honesty_and_anticheat(self):
         text = (Path(PROJECT_ROOT) / "docs" / "mcp-agent-contract.md").read_text(encoding="utf-8")

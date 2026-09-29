@@ -228,8 +228,10 @@ async def compress_messages(
         tpm=tpm,
     )
     try:
+        if api_key is None or not str(api_key).strip():
+            raise ValueError("Refusing to call the model endpoint without an API key")
         client_kwargs: dict[str, Any] = {
-            "api_key": api_key,
+            "api_key": str(api_key).strip(),
             "base_url": api_base.rstrip("/"),
         }
         if timeout is not None:

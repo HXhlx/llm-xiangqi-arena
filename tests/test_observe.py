@@ -60,6 +60,16 @@ class TestFileLegend(unittest.TestCase):
         self.assertIn("黑一路", text)
         self.assertIn("黑九路", text)
 
+    def test_english_legend_is_localized(self):
+        text = file_legend("w", lang="en")
+        self.assertIn("Red file 9 (a)", text)
+        self.assertIn("Red file 1 (i)", text)
+        self.assertNotIn("红九路", text)
+        self.assertNotIn("路：", text)
+        black = file_legend("b", lang="en")
+        self.assertIn("Black file 1 (a)", black)
+        self.assertNotIn("黑一路", black)
+
 
 class TestThreats(unittest.TestCase):
     def test_hanging_major(self):
@@ -136,6 +146,11 @@ class TestOwnPieces(unittest.TestCase):
         text = own_pieces(Board(START_FEN), "w")
         self.assertIn("红炮 h2", text)
         self.assertNotIn("黑", text)
+
+    def test_english_empty_fallback_is_none(self):
+        empty_red = Board("4k4/9/9/9/9/9/9/9/9/9 w")
+        self.assertEqual(own_pieces(empty_red, "w"), "无")
+        self.assertEqual(own_pieces(empty_red, "w", lang="en"), "none")
 
 
 class TestThreatsCycle(unittest.TestCase):
